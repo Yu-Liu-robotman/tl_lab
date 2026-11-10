@@ -1,0 +1,21 @@
+# Tlibot-Z1 velocity sim2sim
+
+# -- paths -------------------------------------------------------------------- #
+# xml comes from the packaged assets (meshes in the same tree); policy
+# sits next to this yaml
+xml_path: "../../../../source/basic_loco_lib/basic_loco_lib/assets/z1_29dof/mjcf/z1_v1_add_shoe.xml"
+policy: "policy.onnx"      # 不存在时自动挑选 logs/rsl_rl 下最新导出的 policy.onnx
+
+# -- sim ---------------------------------------------------------------------- #
+# mujoco side
+simulation_dt: 0.005       # 200 Hz physics
+control_decimation: 4      # x4 -> 50 Hz control
+render_fps: 50             # viewer refresh rate; syncing at 200 Hz makes the rollout run in slow motion
+realtime: true             # pace the loop against the wall clock (false = as fast as possible)
+root_body_name: base_link     # floating base; the camera tracks it
+initial_pos: [0.0, 0.0, 0.865]
+viewer:
+  distance: 3.0
+  azimuth: 90
+  elevation: -45
+  lookat: [0.0, 0.0, 1.0]

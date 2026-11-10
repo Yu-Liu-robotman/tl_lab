@@ -1,0 +1,30 @@
+WARNING Fri Nov  6 12:10:47 2026: Nan, Inf or huge value in CTRL at ACTUATOR 12. The simulation is unstable. Time = 2.4250.
+
+WARNING Fri Nov  6 12:15:47 2026: Nan, Inf or huge value in CTRL at ACTUATOR 6. The simulation is unstable. Time = 2.1950.
+
+WARNING Fri Nov  6 12:15:48 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:15:49 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:15:55 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:15:56 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:00 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:08 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:09 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:09 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:10 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:10 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:10 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+WARNING Fri Nov  6 12:16:10 2026: Nan, Inf or huge value in CTRL at ACTUATOR 0. The simulation is unstable. Time = 0.0000.
+
+ERROR mjv_updateCamera (engine_vis_visualize.c:3020) Fri Nov  6 13:38:29 2026: track body id is outside valid range
+

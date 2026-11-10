@@ -1,0 +1,134 @@
+[build-system]
+requires = ["setuptools", "toml"]
+build-backend = "setuptools.build_meta"
+
+[tool.isort]
+
+atomic = true
+profile = "black"
+line_length = 120
+py_version = 310
+skip_glob = ["docs/*", "logs/*"]
+group_by_package = true
+
+sections = [
+    "FUTURE",
+    "STDLIB",
+    "THIRDPARTY",
+    "ISAACLABPARTY",
+    "FIRSTPARTY",
+    "LOCALFOLDER",
+]
+extra_standard_library = [
+    "numpy",
+    "h5py",
+    "open3d",
+    "torch",
+    "tensordict",
+    "bpy",
+    "matplotlib",
+    "gymnasium",
+    "gym",
+    "scipy",
+    "hid",
+    "yaml",
+    "prettytable",
+    "toml",
+    "trimesh",
+    "tqdm",
+    "psutil",
+]
+known_thirdparty = [
+    "isaacsim.core.api",
+    "omni.replicator.core",
+    "pxr",
+    "omni.kit.*",
+    "warp",
+    "carb",
+    "Semantics",
+]
+known_isaaclabparty = [
+    "isaaclab",
+    "isaaclab_tasks",
+    "isaaclab_assets",
+    "isaaclab_mimic",
+    "isaaclab_rl"
+]
+
+# Modify the following to include the package names of your first-party code
+known_firstparty = "basic_loco_lib"
+known_local_folder = "config"
+
+[tool.pyright]
+
+exclude = [
+    "**/__pycache__",
+    "**/docs",
+    "**/logs",
+    ".git",
+    ".vscode",
+]
+
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+enableTypeIgnoreComments = true
+
+# scripts/* are loose modules imported via sys.path.insert (e.g. ``import cli_args``),
+# so they must be declared here as extra search roots. Relative to this file.
+#
+# isaaclab* / basic_loco_lib are installed as PEP 660 *editable* packages: they rely on
+# ``__editable__*_finder.py`` + ``.pth``, which hook ``sys.meta_path`` at runtime.
+# Pyright never executes .pth files nor custom finders -- it only scans site-packages
+# directories -- so these packages must be pointed at explicitly, otherwise every
+# ``import isaaclab`` shows up as unresolved.
+extraPaths = [
+    "scripts",
+    "scripts/rsl_rl",
+    "scripts/mimic",
+    "deploy_mujoco",
+    "source/basic_loco_lib",
+    "../IsaacLab-release-3.0.0/source/isaaclab",
+    "../IsaacLab-release-3.0.0/source/isaaclab_assets",
+    "../IsaacLab-release-3.0.0/source/isaaclab_contrib",
+    "../IsaacLab-release-3.0.0/source/isaaclab_experimental",
+    "../IsaacLab-release-3.0.0/source/isaaclab_mimic",
+    "../IsaacLab-release-3.0.0/source/isaaclab_newton",
+    "../IsaacLab-release-3.0.0/source/isaaclab_ov",
+    "../IsaacLab-release-3.0.0/source/isaaclab_physx",
+    "../IsaacLab-release-3.0.0/source/isaaclab_ppisp",
+    "../IsaacLab-release-3.0.0/source/isaaclab_rl",
+    "../IsaacLab-release-3.0.0/source/isaaclab_tasks",
+    "../IsaacLab-release-3.0.0/source/isaaclab_tasks_experimental",
+    "../IsaacLab-release-3.0.0/source/isaaclab_teleop",
+    "../IsaacLab-release-3.0.0/source/isaaclab_visualizers",
+]
+
+# CI pre-commit does not download the modules (numpy, torch, prettytable), so this
+# started as "none". Kept as "warning" so a *genuinely* broken import (e.g. a package
+# that does not exist in this environment) is visible in the editor as a yellow hint
+# instead of silently rendering like a resolved one. Switch back to "none" for CI.
+reportMissingImports = "warning"
+# This is required to ignore for type checks of modules with stubs missing.
+reportMissingModuleSource = "none" # -> most common: prettytable in mdp managers
+
+reportGeneralTypeIssues = "none"       # -> raises 218 errors (usage of literal MISSING in dataclasses)
+reportOptionalMemberAccess = "warning" # -> raises 8 errors
+reportPrivateUsage = "warning"
+
+# Isaac Lab configs are dataclasses assembled at runtime (fields typed ``X | None``
+# but always assigned in ``__post_init__``); rsl-rl / gymnasium rely on duck-typing
+# (``runner.alg.policy``). These are not statically provable and produce broad
+# false positives, so they are disabled here.
+reportAttributeAccessIssue = "none"
+reportOptionalSubscript = "none"
+reportOptionalCall = "none"
+reportOptionalIterable = "none"
+reportArgumentType = "none"
+reportAssignmentType = "none"
+reportCallIssue = "none"
+reportReturnType = "none"
+reportOperatorIssue = "none"
+reportIndexIssue = "none"
+reportUnusedImport = "none"
+reportUnusedVariable = "none"
