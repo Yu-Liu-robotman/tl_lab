@@ -71,9 +71,9 @@ Z129DOF = TlibotArticulationCfg(
             # "arm_left_shoulder_roll_joint": 0.2,
             # "arm_left_shoulder_yaw_joint": 0.0,
             # "arm_left_elbow_joint": 1.1,
-            "arm_left_shoulder_pitch_joint": 0.157,
-            "arm_left_shoulder_roll_joint": 0.143,
-            "arm_left_shoulder_yaw_joint": 0.188,
+            "arm_left_shoulder_pitch_joint": 0.188,
+            "arm_left_shoulder_roll_joint": 0.06,
+            "arm_left_shoulder_yaw_joint": 0.44,
             "arm_left_elbow_joint": 1.1,
 
             "arm_left_wrist_roll_joint": 0.0,
@@ -85,9 +85,9 @@ Z129DOF = TlibotArticulationCfg(
             # "arm_right_shoulder_yaw_joint": 0.0,
             # "arm_right_elbow_joint": 1.1,
 
-            "arm_right_shoulder_pitch_joint": 0.157,
-            "arm_right_shoulder_roll_joint": -0.143,
-            "arm_right_shoulder_yaw_joint": -0.188,
+            "arm_right_shoulder_pitch_joint": 0.188,
+            "arm_right_shoulder_roll_joint": -0.06,
+            "arm_right_shoulder_yaw_joint": -0.44,
             "arm_right_elbow_joint": 1.1,
 
             "arm_right_wrist_roll_joint": 0.0,
@@ -104,15 +104,15 @@ Z129DOF = TlibotArticulationCfg(
                 ".*_hip_pitch_joint",
                 ".*_knee_joint",
             ],
-            effort_limit_sim=120.0,
+            effort_limit_sim=100.0,
             velocity_limit_sim=20.0,
             stiffness={
                 ".*_hip_pitch_joint": 200,
-                ".*_knee_joint": 205,
+                ".*_knee_joint": 200,
             },
             damping={
-                ".*_hip_pitch_joint": 8.5,
-                ".*_knee_joint": 8.5,
+                ".*_hip_pitch_joint": 13,
+                ".*_knee_joint": 13,
             },
             armature=0.044,
         ),
@@ -122,7 +122,7 @@ Z129DOF = TlibotArticulationCfg(
                 ".*_hip_yaw_joint",
                 "torso_yaw_joint",
             ],
-            effort_limit_sim=85,
+            effort_limit_sim=75,
             velocity_limit_sim=20,
             stiffness={
                 ".*_hip_roll_joint": 100,
@@ -148,7 +148,7 @@ Z129DOF = TlibotArticulationCfg(
                 "torso_pitch_joint",
                 "torso_roll_joint",
             ],
-            effort_limit_sim=60,
+            effort_limit_sim=50,
             velocity_limit_sim=20,
             stiffness={
                 ".*_shoulder_pitch_joint": STIFFNESS_RH63,
@@ -178,7 +178,7 @@ Z129DOF = TlibotArticulationCfg(
                 ".*_elbow_joint",
                 ".*_ankle_roll_joint",
             ],
-            effort_limit_sim=30,
+            effort_limit_sim=25,
             velocity_limit_sim=30,
             stiffness={
                 ".*_shoulder_yaw_joint": STIFFNESS_RH53,

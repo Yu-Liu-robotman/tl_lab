@@ -4,10 +4,12 @@ import torch
 from typing import TYPE_CHECKING
 
 from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
+from isaaclab.utils.math import sample_uniform
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
+from .observations import imu_bias_state
 from .terminations import DelayedTerminationManager
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
@@ -220,3 +222,47 @@ def reset_from_motion_data(
         motion_dir=motion_dir,
         asset_cfg=asset_cfg,
     )
+
+
+def randomize_imu_bias(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor | slice | None,
+    rpy_max: tuple[float, float, float] = (0.10, 0.10, 0.15),
+    angvel_bias_max: float = 0.05,
+) -> None:
+    """Resample the per-episode IMU mounting rotation and gyro zero bias.
+
+    One ``R_bias`` rotates both the measured gravity and the gyro (the sensor frame is
+    tilted w.r.t. the body frame), and ``angvel_bias`` is the constant gyro offset. The
+    bias is held for the whole episode -- as a real sensor does -- and only the actor
+    observations consume it.
+    """
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    elif isinstance(env_ids, slice):
+        # a full reset hands the manager terms ``slice(None)``, not a tensor
+        env_ids = torch.arange(env.num_envs, device=env.device)[env_ids]
+    else:
+        env_ids = torch.as_tensor(env_ids, device=env.device)
+    num = len(env_ids)
+    if num == 0:
+        return
+    rot_bias, angvel_bias = imu_bias_state(env)
+
+    rpy = sample_uniform(-1.0, 1.0, (num, 3), env.device) * torch.tensor(
+        rpy_max, device=env.device, dtype=torch.float32
+    )
+    c, s = torch.cos(rpy), torch.sin(rpy)
+    cx, cy, cz = c[:, 0], c[:, 1], c[:, 2]
+    sx, sy, sz = s[:, 0], s[:, 1], s[:, 2]
+    rot = torch.stack(
+        [
+            cy * cz, cz * sx * sy - cx * sz, cx * cz * sy + sx * sz,
+            cy * sz, cx * cz + sx * sy * sz, -cz * sx + cx * sy * sz,
+            -sy, cy * sx, cx * cy,
+        ],
+        dim=-1,
+    ).reshape(-1, 3, 3)
+
+    rot_bias[env_ids] = rot
+    angvel_bias[env_ids] = sample_uniform(-angvel_bias_max, angvel_bias_max, (num, 3), env.device)

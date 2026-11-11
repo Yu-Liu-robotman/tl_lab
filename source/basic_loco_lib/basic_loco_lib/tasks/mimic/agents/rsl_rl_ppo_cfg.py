@@ -4,8 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from isaaclab.utils import configclass
-from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlMLPModelCfg, RslRlPpoAlgorithmCfg
-
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlMLPModelCfg, RslRlPpoAlgorithmCfg, RslRlSymmetryCfg
 
 @configclass
 class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
@@ -42,3 +41,13 @@ class BasePPORunnerCfg(RslRlOnPolicyRunnerCfg):
         desired_kl=0.01,
         max_grad_norm=1.0,
     )
+def z1_mimic_ppo_runner_cfg() -> BasePPORunnerCfg:
+    cfg = BasePPORunnerCfg()
+    cfg.experiment_name = "z1_mimic_locomotion"
+    cfg.algorithm.symmetry_cfg = RslRlSymmetryCfg(
+        use_data_augmentation=True,
+        use_mirror_loss=True,
+        mirror_loss_coeff=0.1,
+        data_augmentation_func="basic_loco_lib.tasks.mimic.mdp.symmetry:compute_symmetric_states_z1",
+    )
+    return cfg

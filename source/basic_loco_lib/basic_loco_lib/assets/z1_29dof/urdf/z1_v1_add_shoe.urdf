@@ -300,40 +300,54 @@
           filename="../meshes/leg_left_ankle_roll_link.STL" />
       </geometry>
     </collision> -->
+    <visual name="l_shoe_vis">
+      <origin xyz="0.06 0 -0.055" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/shoe_left.obj"/>
+      </geometry>
+      <material name="shoe"><color rgba="0.85 0.85 0.85 1"/></material>
+    </visual>
+
     <collision name="l_foot_1">
-      <origin xyz="-0.08 0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="-0.050 0.0335 -0.05" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="l_foot_2">
-      <origin xyz="-0.08 -0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="-0.06 -0.0375 -0.05" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="l_foot_3">
-      <origin xyz="0.16 0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="0.16 0.0375 -0.04" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="l_foot_4">
-      <origin xyz="0.16 -0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="0.16 -0.0375 -0.04" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="l_foot_5">
-      <origin xyz="0.17 0 -0.05" rpy="0 0 0"/>
+      <origin xyz="0.1 -0.0375 -0.05" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
-    <collision name="l_foot_6">
-      <origin xyz="0.045 0 -0.035" rpy="0 0 0"/>
+      <collision name="l_foot_6">
+      <origin xyz="0.1 0.0475 -0.05" rpy="0 0 0"/>
       <geometry>
-        <box size="0.25 0.075 0.03"/>
+        <sphere radius="0.005"/>
+      </geometry>
+    </collision>
+    <collision name="l_foot_7">
+      <origin xyz="0.030 0.005 -0.030" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.15 0.065 0.04"/>
       </geometry>
     </collision>
   </link>
@@ -606,40 +620,54 @@
           filename="../meshes/leg_right_ankle_roll_link.STL" />
       </geometry>
     </collision> -->
+
+    <visual name="r_shoe_vis">
+      <origin xyz="0.06 0 -0.055" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="../meshes/shoe_right.obj"/>
+      </geometry>
+      <material name="shoe"><color rgba="0.85 0.85 0.85 1"/></material>
+    </visual>
     <collision name="r_foot_1">
-      <origin xyz="-0.08 0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="-0.060 0.0375 -0.05" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="r_foot_2">
-      <origin xyz="-0.08 -0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="-0.05 -0.0335 -0.05" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="r_foot_3">
-      <origin xyz="0.16 0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="0.16 -0.0375 -0.04" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="r_foot_4">
-      <origin xyz="0.16 -0.0375 -0.05" rpy="0 0 0"/>
+      <origin xyz="0.16 0.0375 -0.04" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
     <collision name="r_foot_5">
-      <origin xyz="0.17 0 -0.05" rpy="0 0 0"/>
+      <origin xyz="0.1 -0.0475 -0.05" rpy="0 0 0"/>
       <geometry>
         <sphere radius="0.005"/>
       </geometry>
     </collision>
-    <collision name="r_foot_6">
-      <origin xyz="0.045 0 -0.035" rpy="0 0 0"/>
+      <collision name="r_foot_6">
+      <origin xyz="0.1 0.0375 -0.05" rpy="0 0 0"/>
       <geometry>
-        <box size="0.25 0.075 0.03"/>
+        <sphere radius="0.005"/>
+      </geometry>
+    </collision>
+    <collision name="r_foot_7">
+      <origin xyz="0.030 -0.005 -0.030" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.15 0.065 0.04"/>
       </geometry>
     </collision>
   </link>

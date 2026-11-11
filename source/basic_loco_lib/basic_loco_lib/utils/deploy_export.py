@@ -61,6 +61,50 @@ def _scalar(value, default: float = 1.0) -> float:
     return float(arr[0]) if arr.size else default
 
 
+def _nominal_joint_gains(env, lab_names: list[str], asset) -> tuple[np.ndarray, np.ndarray]:
+    """Nominal (config) Kp/Kd per joint, ignoring startup domain randomization.
+
+    ``asset.data.joint_stiffness`` / ``joint_damping`` are the *runtime* buffers, and
+    ``mdp.randomize_actuator_gains`` overwrites them at startup with per-env values.
+    Exporting those would ship env 0's perturbed gains to the robot, so resolve every
+    gain from ``env.cfg.scene.robot.actuators`` and only fall back to the runtime buffer
+    for joints no actuator config covers.
+    """
+    from isaaclab.utils.string import resolve_matching_names, resolve_matching_names_values
+
+    n = len(lab_names)
+    stiffness = np.full(n, np.nan)
+    damping = np.full(n, np.nan)
+
+    for act_cfg in (getattr(env.cfg.scene.robot, "actuators", None) or {}).values():
+        for value, out in (
+            (getattr(act_cfg, "stiffness", None), stiffness),
+            (getattr(act_cfg, "damping", None), damping),
+        ):
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                ids, _, vals = resolve_matching_names_values(value, lab_names, strict=False)
+                out[ids] = np.asarray(vals, dtype=float)
+                continue
+            expressions = getattr(act_cfg, "joint_names_expr", None)
+            if not expressions:
+                continue
+            ids, _ = resolve_matching_names(expressions, lab_names, raise_when_no_match=False)
+            out[ids] = float(value)
+
+    for out, runtime in ((stiffness, asset.data.joint_stiffness), (damping, asset.data.joint_damping)):
+        missing = np.isnan(out)
+        if missing.any():
+            fallback = _first_row(runtime)
+            if fallback.size == n:
+                out[missing] = fallback[missing]
+        if np.isnan(out).any():
+            unresolved = [name for name, bad in zip(lab_names, np.isnan(out)) if bad]
+            raise ValueError(f"could not resolve nominal joint gains for {unresolved}")
+    return stiffness, damping
+
+
 # --------------------------------------------------------------------------- #
 # ONNX post-processing (same transform as scripts/rsl_rl/play.py)
 # --------------------------------------------------------------------------- #
@@ -267,6 +311,10 @@ def collect_deploy_params(env) -> dict:
     def to_mj(values: np.ndarray) -> list[float]:
         return [float(v) for v in values[order]]
 
+    # Nominal PD gains from the robot config -- NOT the runtime buffers, which
+    # ``mdp.randomize_actuator_gains`` perturbs at startup.
+    stiffness, damping = _nominal_joint_gains(env, lab_names, asset)
+
     return {
         "backend": backend,
         "obs_history_length": _policy_history_length(env),
@@ -279,8 +327,8 @@ def collect_deploy_params(env) -> dict:
         "command_ranges": command_ranges,
         "ang_vel_scale": ang_vel_scale,
         "joint_vel_scale": joint_vel_scale,
-        "stiffness": to_mj(_first_row(asset.data.joint_stiffness)),
-        "damping": to_mj(_first_row(asset.data.joint_damping)),
+        "stiffness": to_mj(stiffness),
+        "damping": to_mj(damping),
         "default_joint_pos": to_mj(_first_row(asset.data.default_joint_pos)),
         "action_scale": to_mj(_action_scale_per_joint(env, lab_names)),
     }

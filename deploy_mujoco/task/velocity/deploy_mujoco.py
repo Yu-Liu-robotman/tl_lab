@@ -38,6 +38,47 @@ def pd_control(target_q, q, kp, target_dq, dq, kd):
     return (target_q - q) * kp + (target_dq - dq) * kd
 
 
+def body_lin_vel(m, d, body_name, local=False):
+    """Linear velocity of a body frame origin; local=True expresses it in the kinematic body frame.
+
+    ``mj_objectVelocity`` returns ``(angular, linear)``, not ``(linear, angular)``, and its
+    ``flg_local`` uses the inertial (principal-axis) frame rather than the body frame.
+    """
+    bid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if bid < 0:
+        raise ValueError(f"unknown body '{body_name}'")
+    res = np.zeros(6)
+    mujoco.mj_objectVelocity(m, d, mujoco.mjtObj.mjOBJ_BODY, bid, res, 0)
+    v_w = res[3:6].copy()
+    if not local:
+        return v_w
+    rot = np.zeros(9)
+    mujoco.mju_quat2Mat(rot, np.ascontiguousarray(d.xquat[bid]))
+    return rot.reshape(3, 3).T @ v_w
+
+
+def yaw_frame_lin_vel(quat_wxyz, vel_w):
+    """Project a world velocity onto the yaw-aligned horizontal frame the commands use."""
+    rot = quat_to_mat(quat_wxyz)
+    yaw = np.arctan2(rot[1, 0], rot[0, 0])
+    c, s = np.cos(yaw), np.sin(yaw)
+    return np.array([c * vel_w[0] + s * vel_w[1], -s * vel_w[0] + c * vel_w[1]])
+
+
+def print_body_lin_vel(m, d, body_name, command):
+    """Print world / yaw-frame / body-frame linear velocity next to the current command."""
+    v_w = body_lin_vel(m, d, body_name, local=False)
+    v_b = body_lin_vel(m, d, body_name, local=True)
+    v_yaw = yaw_frame_lin_vel(d.qpos[3:7], v_w)
+    print(
+        f"[vel] t={d.time:6.2f}s body={body_name}  "
+        f"v_w=({v_w[0]:+.3f},{v_w[1]:+.3f},{v_w[2]:+.3f})  "
+        f"v_yaw=({v_yaw[0]:+.3f},{v_yaw[1]:+.3f})  "
+        f"v_body=({v_b[0]:+.3f},{v_b[1]:+.3f},{v_b[2]:+.3f})  "
+        f"cmd=({command[0]:+.3f},{command[1]:+.3f},{command[2]:+.3f} rad/s)"
+    )
+
+
 def viewer_setup(viewer, model, cam, track_body_name):
     """Apply the yaml 'viewer:' camera block; track the root body."""
     viewer.cam.distance = cam["distance"]
@@ -282,6 +323,8 @@ def main():
     print(f"policy obs: {obs_dim} dims (history_length={obs_history_length}); command={command.tolist()}")
     if render_every > 1:
         print(f"viewer: {render_fps:.0f} Hz (sync every {render_every} physics steps), realtime={realtime}")
+    # How often (in physics steps) to dump the base linear velocity.
+    print_every_steps = max(1, int(config.get("print_vel_interval_steps", decimation * 25)))
     timestep = 0
     sim_elapsed = 0.0
     slow_warned = False
@@ -324,6 +367,8 @@ def main():
                 target_dof_pos[action_mj_indices] = (
                     action * action_scale[action_mj_indices] + default_dof[action_mj_indices]
                 )
+                if timestep % print_every_steps == 0:
+                    print_body_lin_vel(m, d, root_body_name, command)
 
             # PD control at physics rate.
             tau = pd_control(

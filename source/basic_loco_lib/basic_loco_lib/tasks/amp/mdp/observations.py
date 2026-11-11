@@ -97,3 +97,36 @@ def robot_body_ang_vel_b(
     ).reshape(env.num_envs, num_bodies, 3)
 
     return body_ang_vel_b.reshape(env.num_envs, -1)
+
+
+# --------------------------------------------------------------------------- #
+# IMU mounting / zero bias (actor observations only)
+# --------------------------------------------------------------------------- #
+def imu_bias_state(env) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-episode IMU bias buffers, lazily created as identity / zero."""
+    if not hasattr(env, "imu_R_bias"):
+        env.imu_R_bias = torch.eye(3, device=env.device).repeat(env.num_envs, 1, 1)
+        env.imu_angvel_bias = torch.zeros(env.num_envs, 3, device=env.device)
+    return env.imu_R_bias, env.imu_angvel_bias
+
+
+def projected_gravity_imu(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """``projected_gravity`` as seen through the (misaligned) IMU frame."""
+    from basic_loco_lib.tasks.velocity import mdp
+
+    gravity = mdp.projected_gravity(env, asset_cfg)
+    rot_bias, _ = imu_bias_state(env)
+    return torch.bmm(rot_bias, gravity.unsqueeze(-1)).squeeze(-1)
+
+
+def base_ang_vel_imu(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """``base_ang_vel`` in the IMU frame plus the constant gyro zero bias."""
+    from basic_loco_lib.tasks.velocity import mdp
+
+    ang_vel = mdp.base_ang_vel(env, asset_cfg)
+    rot_bias, angvel_bias = imu_bias_state(env)
+    return torch.bmm(rot_bias, ang_vel.unsqueeze(-1)).squeeze(-1) + angvel_bias

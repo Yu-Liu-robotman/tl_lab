@@ -4,14 +4,15 @@ Batch convert motion csv files to npz recursively.
 output_root/
  └── npz/      # AMP 可用：整机 29 关节 + 全部刚体 + joint_names/body_names/ordering
 
-python3 scripts/mimic/bath_csv_to_npz.py \
-    --input_dir /home/user/LY_TRA/basic_loco_lib-main/data/z1_amp/turn_30fps \
-    --output_dir /home/user/LY_TRA/basic_loco_lib-main/data/z1_amp/output \
-    --input_fps 30 \
+python3 scripts/tool/bath_csv_to_npz.py \
+    --input_dir data/z1_amp/test \
+    --output_dir data/z1_amp/test/output \
+    --input_fps 15 \
     --output_fps 50 \
     --robot z1 \
     --backend newton \
     --overwrite \
+    --pos_z_offset 0.025 \
     --viz kit \
     --frame_range 30 110
 
@@ -36,7 +37,7 @@ parser.add_argument("--robot", type=str, default="z1", choices=["z1"],
 parser.add_argument("--backend", type=str, default="physx", choices=["physx", "newton"],
                     help="回放所用物理后端。记录下来的关节/刚体顺序随后端变化，"
                          "生成的 npz 只能喂给相同后端的任务（会写入 ordering 字段）")
-parser.add_argument("--pos_z_offset", type=float, default=0.025,help="base_link 的 z (m)") # 0.028
+parser.add_argument("--pos_z_offset", type=float, default=0.0,help="base_link 的 z (m)") # 0.028
 parser.add_argument("--csv_skip", nargs="*", default=["wrist"],help="csv 里不包含的关节名关键字（这些关节在 npz 里写 0）")
 parser.add_argument("--frame_range", nargs=2, type=int, metavar=("START", "END"), default=None,
                     help="只转换这一段帧（从 1 开始、两端包含）")

@@ -79,6 +79,7 @@ REF/
 /data/*
 !/data/amp/
 !/data/amp/**
+!/data/z1_amp/**
 
 # Keep all packaged robot assets, including meshes and USD files.
 !source/basic_loco_lib/basic_loco_lib/assets/

@@ -61,10 +61,10 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
     obs_groups = {"actor": ["actor"], "critic": ["critic"]}
 
     # AMP-specific parameters
-    amp_reward_coef: float = 0.1
+    amp_reward_coef: float = 0.02 * 10
     amp_motion_files: str = ""
     amp_num_preload_transitions: int = 200000
-    amp_task_reward_lerp: float = 0.75
+    amp_task_reward_lerp: float = 0.6
     amp_discr_hidden_dims: list = (1024, 512, 256)
     min_normalized_std: list = (0.05,) * 29
     amp_body_names: tuple = ()
@@ -128,13 +128,12 @@ Z1_AMP_BODY_NAMES: tuple = (
 Z1_AMP_MOTION_DIR = PROJECT_DIR / "data" / "z1_amp" / "output" / "npz"
 Z1_AMP_MOTION_FILES: tuple = tuple(sorted(str(path) for path in Path(Z1_AMP_MOTION_DIR).glob("*.npz")))
 Z1_AMP_MOTION_SPEC_BY_FILE: dict[str, tuple[str, float]] = {
-    "z1_23dof_forward_new.npz": ("forward", 1.0),
-    "z1_forward2.npz": ("forward", 1.0),
-    "z1_forward2_backward.npz": ("backward", 1.0),
-    "z1_23dof_forward_new_backward.npz": ("backward", 1.0),
+    "z1_forward_11102335_50.npz": ("forward", 1.0),
+    "z1_forward2_backward.npz": ("backward", 0.0),
+    "z1_23dof_forward_new_backward.npz": ("backward", 0.0),
     "z1_23dof_stand.npz": ("stand", 1.0),
-    "z1_23dof_turn_left_segment_3649-3922.npz": ("turn_left", 1.0),
-    "z1_23dof_turn_right_segment_3176-3449.npz": ("turn_right", 1.0),
+    "z1_23dof_turn_left_segment_3649-3922.npz": ("turn_left", 0.0),
+    "z1_23dof_turn_right_segment_3176-3449.npz": ("turn_right", 0.0),
 }
 _z1_file_names = tuple(Path(path).name for path in Z1_AMP_MOTION_FILES)
 _z1_missing = tuple(name for name in _z1_file_names if name not in Z1_AMP_MOTION_SPEC_BY_FILE)

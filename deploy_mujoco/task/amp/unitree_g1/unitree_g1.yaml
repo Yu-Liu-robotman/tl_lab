@@ -10,6 +10,7 @@ policy: "policy.onnx"      # self-contained ONNX export with a single obs_histor
 # mujoco side
 simulation_dt: 0.005       # 200 Hz physics
 control_decimation: 4      # x4 -> 50 Hz control
+print_vel_interval_steps: 100   # dump root body linear velocity every N physics steps (100 = 0.5 s)
 root_body_name: pelvis     # floating base; the camera tracks it
 initial_pos: [0.0, 0.0, 0.76]   # UNITREE_G1_29DOF_AMP_CFG init height
 viewer:

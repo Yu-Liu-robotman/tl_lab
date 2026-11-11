@@ -66,6 +66,9 @@ _BODY_VEC_SIGN = {
 # Per-body 6D orientation term (first two columns of the rotation matrix).
 _BODY_ORI_TERMS = ("body_ori_b",)
 
+# Per-foot contact flags: mirroring is a plain left <-> right swap (0/1, no sign).
+_CONTACT_TERMS = ("feet_contact",)
+
 
 # --------------------------------------------------------------------------- #
 # name tables
@@ -140,6 +143,41 @@ def _body_names(env_unwrapped, group: str, term: str) -> list[str]:
     return _resolve_body_names(env_unwrapped, body_cfg.body_names, getattr(body_cfg, "preserve_order", False))
 
 
+def _sensor_body_names(env_unwrapped, group: str, term: str) -> list[str]:
+    """Body order of ``sensor_cfg`` as the term itself consumes it.
+
+    The sensor usually spans every robot body (``Robot/.*``) while the term picks a
+    subset through ``body_names``. ``SceneEntityCfg`` is only resolved once the sim
+    starts playing, so the regex is re-resolved here instead of trusting
+    ``body_ids`` to be concrete already.
+    """
+    cfg = _term_cfg(env_unwrapped, group, term)
+    sensor_cfg = (getattr(cfg, "params", None) or {}).get("sensor_cfg") if cfg is not None else None
+    if sensor_cfg is None:
+        raise ValueError(f"cannot resolve sensor_cfg for observations.{group}.{term}")
+    sensor = env_unwrapped.scene[sensor_cfg.name]
+    preserve_order = bool(getattr(sensor_cfg, "preserve_order", False))
+
+    patterns = getattr(sensor_cfg, "body_names", None)
+    if patterns is not None:
+        find = getattr(sensor, "find_sensors", None) or getattr(sensor, "find_bodies", None)
+        if find is not None:
+            _, names = find(patterns, preserve_order=preserve_order)
+            if names:
+                return list(names)
+
+    all_names = list(getattr(sensor, "sensor_names", None) or getattr(sensor, "body_names", None) or [])
+    if not all_names:
+        raise ValueError(f"cannot resolve sensor body names for observations.{group}.{term}")
+
+    ids = getattr(sensor_cfg, "body_ids", slice(None))
+    if isinstance(ids, int):
+        ids = [ids]
+    if isinstance(ids, slice):
+        return all_names[ids]
+    return [all_names[i] for i in ids]
+
+
 def _action_joint_names(env_unwrapped) -> list[str]:
     """Joint names of the (single) joint-position action term, in its own order."""
     cfg = getattr(env_unwrapped.cfg.actions, "joint_pos", None)
@@ -195,6 +233,13 @@ def _mirror_term(env_unwrapped, group: str, term: str, x: torch.Tensor) -> torch
     if term in _BODY_ORI_TERMS:
         names = _body_names(env_unwrapped, group, term)
         return _mirror_bodies_6d(x, len(names), _body_perm(names, x.device))
+    if term in _CONTACT_TERMS:
+        names = _sensor_body_names(env_unwrapped, group, term)
+        if len(names) != x.shape[-1]:
+            raise ValueError(
+                f"observations.{group}.{term}: {len(names)} sensor bodies but frame_dim {x.shape[-1]}"
+            )
+        return x[..., _body_perm(names, x.device)]
     raise KeyError(f"no mirror rule for observation term '{term}' (group '{group}')")
 
 
