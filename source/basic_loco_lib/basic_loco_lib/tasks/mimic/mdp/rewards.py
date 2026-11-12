@@ -311,3 +311,17 @@ def body_orientation_l1(
     roll = torch.asin(gravity_b[..., 1].clamp(-1.0, 1.0))
     lean = torch.relu(torch.abs(pitch - pitch_target) - tolerance) + torch.relu(torch.abs(roll) - tolerance)
     return lean.mean(dim=-1)
+
+def swing_lift_floor(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    stance_z: float = 0.061,      # 站立时踝链节世界 z（实测）
+    min_lift: float = 0.06,       # 摆动相至少抬 6 cm
+) -> torch.Tensor:
+    """摆动脚抬升不足时线性惩罚；抬过 min_lift 就零成本。"""
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    in_air = (sensor.data.current_air_time.torch[:, sensor_cfg.body_ids] > 0.0).float()
+    z = env.scene[asset_cfg.name].data.body_pos_w.torch[:, asset_cfg.body_ids, 2]
+    z = z - env.scene.env_origins[:, None, 2]
+    return ((min_lift - (z - stance_z)).clamp(min=0.0) * in_air).sum(dim=-1)

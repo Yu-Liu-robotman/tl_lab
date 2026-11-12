@@ -131,20 +131,37 @@ def _mask_by_delay(env, reward: torch.Tensor, delay_rew_ratio: float) -> torch.T
 
 # -- Joint deviation when standing
 def joint_deviation_l1_when_standing(
-    env,
-    asset_cfg=SceneEntityCfg("robot"),
-    command_name: str = "twist",
-    command_threshold: float = 0.1,
-    stand_cmd: bool = True,
+    env, asset_cfg=SceneEntityCfg("robot"), command_name: str = "twist",
+    command_threshold: float = 0.1, stand_cmd: bool = True,
+    vel_threshold: float = 0.25, angvel_threshold: float = 0.8,
+    tolerance: float = 0.0,
+    require_contact: bool = False,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+    min_contact_time: float = 0.15,
 ) -> torch.Tensor:
-
+    """Keep joints near default while standing, with a deadband so balance work is free."""
     if stand_cmd:
         active = _standing_mask(env, command_name, command_threshold).float()
     else:
         command = env.command_manager.get_command(command_name)
         magnitude = torch.linalg.vector_norm(command[:, :2], dim=1) + command[:, 2].abs()
         active = (magnitude < command_threshold).float()
-    return mdp.joint_deviation_l1(env, asset_cfg) * active
+
+    asset = env.scene[asset_cfg.name]
+    if vel_threshold > 0.0:
+        speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=-1)
+        active = active * (speed < vel_threshold).float()
+    if angvel_threshold > 0.0:
+        rate = torch.linalg.vector_norm(asset.data.root_ang_vel_b.torch, dim=-1)
+        active = active * (rate < angvel_threshold).float()
+    if require_contact:
+        sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+        ct = sensor.data.current_contact_time[:, sensor_cfg.body_ids]
+        active = active * (ct > min_contact_time).all(dim=-1).float()
+
+    q = asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
+    q0 = asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids]
+    return (torch.abs(q - q0) - tolerance).clamp(min=0.0).sum(dim=-1) * active
 
 # -- Base height above terrain with deadband
 def base_height_above_terrain_deadband(
@@ -204,3 +221,30 @@ def body_orientation_l1(
     return lean.mean(dim=-1)
 
 
+def foot_step_home_exp(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    asset_cfg: SceneEntityCfg,
+    default_foot_xy=((0.0, 0.115), (0.0, -0.115)),   # base 系 (x, y)，需要实测
+    std: float = 0.05,
+    min_air_time: float = 0.06,
+    command_name: str = "twist",
+    command_threshold: float = 0.1,
+) -> torch.Tensor:
+    """站立时迈出的一步，落点接近默认站位就给奖励（奖励"抬脚回位"而不是"拖脚回位"）。"""
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    first_contact = sensor.compute_first_contact(env.step_dt).torch[:, sensor_cfg.body_ids].float()
+    air_time = sensor.data.last_air_time.torch[:, sensor_cfg.body_ids]
+
+    asset = env.scene[asset_cfg.name]
+    rel = asset.data.body_pos_w.torch[:, asset_cfg.body_ids] - asset.data.root_pos_w.torch[:, None]
+    quat = asset.data.root_quat_w.torch[:, None].expand(-1, rel.shape[1], -1).reshape(-1, 4)
+    feet_b = math_utils.quat_apply_inverse(quat, rel.reshape(-1, 3)).reshape(rel.shape)
+
+    ref = torch.tensor(default_foot_xy, device=rel.device, dtype=rel.dtype)
+    err = torch.linalg.vector_norm(feet_b[:, :, :2] - ref, dim=-1)
+    landed = (air_time > min_air_time).float() * first_contact
+    reward = torch.exp(-err / std) * landed
+
+    active = _standing_mask(env, command_name, command_threshold).float()
+    return reward.sum(dim=-1) * active

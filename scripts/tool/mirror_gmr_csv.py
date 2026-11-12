@@ -21,8 +21,8 @@ csv 布局（**无表头**，逗号分隔）—— 权威来源 ``humanoid/scrip
         humanoid/envs/z1_29dof_amp_sym_flat/datasets/23dof/gmr/csv3/foward_segment_0122-0268.csv --check
 
     # 1) 左右镜像（默认 mode=left-right），输出 <stem>_mirrored.csv
-    python humanoid/scripts/tools/mirror_gmr_csv.py \
-        /home/user/LY/human_z1_lab/huma_robot_lab/humanoid/envs/z1_29dof_amp_sym_flat/datasets/23dof_shoe/gmr/walk/walk2/forward_mid_left_segment_0914-0988_a0.77.csv
+    python scripts/tool/mirror_gmr_csv.py \
+        /home/user/LY/turn_smplx_z1_v1.csv
 
     # 2) 整个目录批量
     python humanoid/scripts/tools/mirror_gmr_csv.py \
@@ -51,29 +51,40 @@ import numpy as np
 # 所以这里的顺序必须与它逐项一致。
 # --------------------------------------------------------------------------------------
 Z1_23DOF_JOINT_NAMES = [
-    "leg_left_hip_pitch_joint",
-    "leg_left_hip_roll_joint",
-    "leg_left_hip_yaw_joint",
-    "leg_left_knee_joint",
-    "leg_left_ankle_pitch_joint",
-    "leg_left_ankle_roll_joint",
-    "leg_right_hip_pitch_joint",
-    "leg_right_hip_roll_joint",
-    "leg_right_hip_yaw_joint",
-    "leg_right_knee_joint",
-    "leg_right_ankle_pitch_joint",
-    "leg_right_ankle_roll_joint",
-    "torso_yaw_joint",
-    "torso_pitch_joint",
-    "torso_roll_joint",
-    "arm_left_shoulder_pitch_joint",
-    "arm_left_shoulder_roll_joint",
-    "arm_left_shoulder_yaw_joint",
-    "arm_left_elbow_joint",
-    "arm_right_shoulder_pitch_joint",
-    "arm_right_shoulder_roll_joint",
-    "arm_right_shoulder_yaw_joint",
-    "arm_right_elbow_joint",
+        'leg_left_hip_pitch_joint',
+        'leg_left_hip_roll_joint',
+        'leg_left_hip_yaw_joint',
+        'leg_left_knee_joint',
+        'leg_left_ankle_pitch_joint',
+        'leg_left_ankle_roll_joint',
+        'leg_right_hip_pitch_joint',
+        'leg_right_hip_roll_joint',
+        'leg_right_hip_yaw_joint',
+        'leg_right_knee_joint',
+        'leg_right_ankle_pitch_joint',
+        'leg_right_ankle_roll_joint',
+
+        'torso_yaw_joint',
+        'torso_pitch_joint',
+        'torso_roll_joint',
+
+        "arm_left_shoulder_pitch_joint",
+        "arm_left_shoulder_roll_joint",
+        "arm_left_shoulder_yaw_joint",
+        "arm_left_elbow_joint",
+
+        "arm_left_wrist_roll_joint",
+        "arm_left_wrist_pitch_joint",
+        "arm_left_wrist_yaw_joint",
+
+        "arm_right_shoulder_pitch_joint",
+        "arm_right_shoulder_roll_joint",
+        "arm_right_shoulder_yaw_joint",
+        "arm_right_elbow_joint",
+
+        "arm_right_wrist_roll_joint",
+        "arm_right_wrist_pitch_joint",
+        "arm_right_wrist_yaw_joint",   
 ]
 
 DOF_PRESETS: dict[str, list[str]] = {

@@ -61,7 +61,7 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
     obs_groups = {"actor": ["actor"], "critic": ["critic"]}
 
     # AMP-specific parameters
-    amp_reward_coef: float = 0.02 * 6
+    amp_reward_coef: float = 0.02 * 10
     amp_motion_files: str = ""
     amp_num_preload_transitions: int = 200000
     amp_task_reward_lerp: float = 0.65

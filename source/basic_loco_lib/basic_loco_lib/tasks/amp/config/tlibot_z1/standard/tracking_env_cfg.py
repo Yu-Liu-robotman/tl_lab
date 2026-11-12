@@ -175,7 +175,7 @@ class RewardsCfg:
         weight=1.0,
         params={
             "command_name": "twist",
-            "std": 1.0,
+            "std": 0.3,
             "mask_delay": True,
             "delay_env_rew_ratio": 0.0,
             "anchor_cfg": SceneEntityCfg("robot", body_names=_ANCHOR_NAME),
@@ -197,13 +197,8 @@ class RewardsCfg:
         func=amp_rewards.base_height_above_terrain_deadband,
         weight=-3.0,
         # no height scanner in this scene: falls back to the env origin height
-        params={"target_height": 0.865, "deadband": 0.03},
+        params={"target_height": 0.865, "deadband": 0.015},
     )
-    # feet_slide = RewTerm(
-    #     func=mdp.feet_slide, weight=-0.2,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
-    #             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")},
-    # )
     stand_to_action_commanded = RewTerm(
         func=amp_rewards.feet_not_lifted_when_commanded, weight=-2.0,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
@@ -211,26 +206,35 @@ class RewardsCfg:
                 "min_contact_time": 0.15, "velocity_ratio": 0.5},
     )
     # stand in place and settle back to the default joint pose
-    stand_default_pose = RewTerm(func=amp_rewards.joint_deviation_l1_when_standing, weight=-1.0,
+    stand_pose = RewTerm(
+        func=amp_rewards.joint_deviation_l1_when_standing, weight=-1.0,
         params={"command_threshold": 0.1, "stand_cmd": True,
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["arm_.*_joint","torso_yaw_joint", "torso_roll_joint"])}) 
-   
-    stand_hip_rot_deviation = RewTerm(
-            func=amp_rewards.joint_deviation_l1_when_standing,
-            weight=-0.6,  
-            params={
-                "command_threshold": 0.1,
-                "stand_cmd": True,
-                "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"])
-            }
-        )
+                "vel_threshold": 0.15, "angvel_threshold": 0.4,
+                "require_contact": True, "min_contact_time": 0.15,
+                "tolerance": 0.10,
+                "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},
+    )
+    stand_foot_step_home = RewTerm(
+        func=amp_rewards.foot_step_home_exp, weight=1.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
+                "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*", preserve_order=True),
+                "default_foot_xy": ((0.014, 0.110), (0.008, -0.111)),
+                "std": 0.04, "min_air_time": 0.10,
+                "command_name": "twist", "command_threshold": 0.1},
+    )
+    feet_slide = RewTerm(
+        func=mdp.feet_slide, weight=-0.4,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")},
+    )
+    # ------------------------------------------------------------------------------------------
     body_orientation_l2 = RewTerm(
         func=amp_rewards.body_orientation_l1,
         weight=-1.0,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="torso_roll_link"),
             "tolerance": 0.05,
-            "pitch_target": 0.05,
+            "pitch_target": 0,
         },
     )
     # -- base
@@ -302,7 +306,7 @@ class RobotEnvCfg(BaseRobotEnvCfg):
                 "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
             },
         )
-        self.events.push_robot.interval_range_s = (5.0, 10.0)
+        self.events.push_robot.interval_range_s = (3.0, 5.0)
         self.events.push_robot.params = {"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}}        # IMU mounting / zero bias, resampled every episode (actor observations only)
         self.events.imu_bias = EventTerm(
             func=amp_events.randomize_imu_bias,

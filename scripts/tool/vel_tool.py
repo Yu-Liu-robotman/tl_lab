@@ -22,9 +22,9 @@ CSV 里没有速度列，vx/vy/wz 由根位置/偏航的数值差分得到，再
 
 
 python scripts/tool/vel_tool.py \
-    /home/user/LY_TRA/basic_loco_lib-main/data/z1_amp/test/output/csv \
+    data/z1_amp/test/test2 \
     --csv-fps 50 \
-    --amp-target-vx  0.72
+    --amp-target-vx  0.75
 
 """
 from __future__ import annotations
