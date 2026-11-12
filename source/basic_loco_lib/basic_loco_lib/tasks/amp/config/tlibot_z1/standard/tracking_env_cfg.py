@@ -30,23 +30,23 @@ from basic_loco_lib.tasks.base_cfg.base_cfg import (
     RobotSceneCfg,
 )
 from basic_loco_lib.tasks.velocity import mdp
-from basic_loco_lib.tasks.velocity.terrain import TLIBOT_Z1_ROUGH_TERRAINS_CFG as TERRAIN_CFG
+from basic_loco_lib.tasks.velocity.terrain import DWAQ_HARD_TERRAINS_CFG as TERRAIN_CFG
 
 ##
 # Actions
 ##
-@configclass
-class ActionsCfg(BaseActionsCfg):
-    """Joint-position action with a 0-2 control-step actuation delay."""
+# @configclass
+# class ActionsCfg(BaseActionsCfg):
+#     """Joint-position action with a 0-2 control-step actuation delay."""
 
-    JointPositionAction = DelayedJointPositionActionCfg(
-        asset_name="robot",
-        joint_names=[".*"],
-        scale=1.0,
-        use_default_offset=True,
-        min_delay=0,
-        max_delay=2,
-    )
+#     JointPositionAction = DelayedJointPositionActionCfg(
+#         asset_name="robot",
+#         joint_names=[".*"],
+#         scale=1.0,
+#         use_default_offset=True,
+#         min_delay=0,
+#         max_delay=2,
+#     )
 
 
 ##
@@ -57,23 +57,22 @@ class CommandsCfg:
     twist = amp_commands.AmpVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
-        rel_standing_envs=0.20,
-        rel_turning_envs=0.0,
-        rel_lateral_envs=0.0,
-        rel_heading_envs=0.0,
-        heading_command=False,
-        debug_vis=True,
+        rel_standing_envs=0.20, # 站立占比
+        rel_turning_envs=0.0,   # 原地转向占比
+        rel_lateral_envs=0.0,   # 横移占比
+        rel_heading_envs=0.1,   # 朝向占比
+        heading_command=True,
+        debug_vis=False,
         ranges=amp_commands.AmpVelocityCommandCfg.Ranges(
             # forward only, and kept away from 0 so it is never a "fake stand" bucket
-            lin_vel_x=(0.1, 1.20),
+            lin_vel_x=(-0.6, 1.0),
             lin_vel_y=(0.0, 0.0),
-            ang_vel_z=(0.0, 0.0),
-            heading=(0.0, 0.0),
-            pure_turn_ang_vel=(0.0, 0.0),
-            pure_lateral_lin_vel=(0.0, 0.0),
-        ),
+            ang_vel_z=(-0.6, 0.6),
+            heading=(-math.pi / 2, math.pi / 2),
+            pure_turn_ang_vel=(-0.6, 0.6),    # 纯转向桶
+            pure_lateral_lin_vel=(-0.3, 0.3), # 纯横移桶
+        ), 
     )
-
 
 ##
 # Observations
@@ -200,11 +199,11 @@ class RewardsCfg:
         # no height scanner in this scene: falls back to the env origin height
         params={"target_height": 0.865, "deadband": 0.03},
     )
-    feet_slide = RewTerm(
-        func=mdp.feet_slide, weight=-0.2,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
-                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")},
-    )
+    # feet_slide = RewTerm(
+    #     func=mdp.feet_slide, weight=-0.2,
+    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+    #             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")},
+    # )
     stand_to_action_commanded = RewTerm(
         func=amp_rewards.feet_not_lifted_when_commanded, weight=-2.0,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
@@ -212,14 +211,31 @@ class RewardsCfg:
                 "min_contact_time": 0.15, "velocity_ratio": 0.5},
     )
     # stand in place and settle back to the default joint pose
-    stand_default_pose = RewTerm(func=amp_rewards.joint_deviation_l1_when_standing, weight=-2.0,
+    stand_default_pose = RewTerm(func=amp_rewards.joint_deviation_l1_when_standing, weight=-1.0,
         params={"command_threshold": 0.1, "stand_cmd": True,
-                "vel_threshold": 0.25, "angvel_threshold": 0.8,
-                "asset_cfg": SceneEntityCfg("robot", joint_names=["leg_.*_joint", "arm_.*_joint","torso_yaw_joint", "torso_roll_joint"])}) 
-
+                "asset_cfg": SceneEntityCfg("robot", joint_names=["arm_.*_joint","torso_yaw_joint", "torso_roll_joint"])}) 
+   
+    stand_hip_rot_deviation = RewTerm(
+            func=amp_rewards.joint_deviation_l1_when_standing,
+            weight=-0.6,  
+            params={
+                "command_threshold": 0.1,
+                "stand_cmd": True,
+                "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"])
+            }
+        )
+    body_orientation_l2 = RewTerm(
+        func=amp_rewards.body_orientation_l1,
+        weight=-1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="torso_roll_link"),
+            "tolerance": 0.05,
+            "pitch_target": 0.05,
+        },
+    )
     # -- base
     base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
-    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.5)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
     applied_torque_limits = RewTerm(func=mdp.applied_torque_limits, weight=-0.01)
@@ -252,7 +268,7 @@ class RobotEnvCfg(BaseRobotEnvCfg):
 
     observations: ObservationsCfg = ObservationsCfg()
     commands: CommandsCfg = CommandsCfg()
-    actions: ActionsCfg = ActionsCfg()
+    # actions: ActionsCfg = ActionsCfg()
     rewards: RewardsCfg = RewardsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
     curriculum = None

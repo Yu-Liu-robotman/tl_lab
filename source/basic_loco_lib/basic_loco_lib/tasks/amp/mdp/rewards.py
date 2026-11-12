@@ -8,6 +8,9 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
 from isaaclab.utils.math import quat_apply_inverse, quat_apply_yaw
 
+import isaaclab.utils.math as math_utils
+from basic_loco_lib.tasks.velocity import mdp
+
 from basic_loco_lib.algo.amp.motion_labels import (
     COMMAND_MODE_STANDING, # stand command mode
     COMMAND_MODE_TURNING,  # turn command mode -W
@@ -133,17 +136,7 @@ def joint_deviation_l1_when_standing(
     command_name: str = "twist",
     command_threshold: float = 0.1,
     stand_cmd: bool = True,
-    vel_threshold: float = 0.25,
-    angvel_threshold: float = 0.8,
 ) -> torch.Tensor:
-    """Keep selected joints near their defaults while the robot is standing still.
-
-    ``stand_cmd=True`` uses the command label maintained by ``AmpVelocityCommand``
-    (falling back to a command-magnitude test); ``stand_cmd=False`` always uses the
-    magnitude test. ``vel_threshold`` / ``angvel_threshold`` additionally gate on the
-    root speed, so the term fades out while the robot is still braking.
-    """
-    from basic_loco_lib.tasks.velocity import mdp
 
     if stand_cmd:
         active = _standing_mask(env, command_name, command_threshold).float()
@@ -151,16 +144,6 @@ def joint_deviation_l1_when_standing(
         command = env.command_manager.get_command(command_name)
         magnitude = torch.linalg.vector_norm(command[:, :2], dim=1) + command[:, 2].abs()
         active = (magnitude < command_threshold).float()
-
-    if vel_threshold > 0.0 or angvel_threshold > 0.0:
-        asset = env.scene[asset_cfg.name]
-        if vel_threshold > 0.0:
-            speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=-1)
-            active = active * (speed < vel_threshold).float()
-        if angvel_threshold > 0.0:
-            rate = torch.linalg.vector_norm(asset.data.root_ang_vel_b.torch, dim=-1)
-            active = active * (rate < angvel_threshold).float()
-
     return mdp.joint_deviation_l1(env, asset_cfg) * active
 
 # -- Base height above terrain with deadband
@@ -204,87 +187,20 @@ def _standing_mask(env, command_name: str = "twist", command_threshold: float = 
     cmd = env.command_manager.get_command(command_name)
     return torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs() <= command_threshold
 
-
-def _stand_gate(
-    env,
-    sensor_cfg: SceneEntityCfg,
-    torso_cfg: SceneEntityCfg,
-    command_name: str = "twist",
-    command_threshold: float = 0.1,
-    planar_speed_scale: float = 0.2,
-    torso_ang_vel_scale: float = 0.5,
-    contact_force_threshold: float = 5.0,
+def body_orientation_l1(
+    env, asset_cfg, tolerance: float = 0.02, pitch_target: float = 0.0
 ) -> torch.Tensor:
-    """站立稳定软权重 ∈ [0,1]：站立指令 × 低基座平面速度 × 低躯干角速度 × 双脚触地。"""
-    v2 = env.scene["robot"].data.root_lin_vel_w.torch[:, :2].square().sum(-1)
-    w2 = env.scene[torso_cfg.name].data.body_ang_vel_w.torch[:, torso_cfg.body_ids[0]].square().sum(-1)
-    forces = env.scene.sensors[sensor_cfg.name].data.net_normal_forces_w_history.torch  # [N,H,S,3]
-    feet_f = torch.linalg.vector_norm(forces[:, :, sensor_cfg.body_ids], dim=-1).amax(dim=1)  # [N,K]
-    contact = (feet_f > contact_force_threshold).all(dim=1)  # 只用双脚，不用全机身
-    return (
-        _standing_mask(env, command_name, command_threshold).float()
-        * torch.exp(-v2 / planar_speed_scale**2)
-        * torch.exp(-w2 / torso_ang_vel_scale**2)
-        * contact.float()
-    )
-
-def _joint_err(env, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    data = env.scene[asset_cfg.name].data
-    ids = asset_cfg.joint_ids
-    return data.joint_pos.torch[:, ids] - data.default_joint_pos.torch[:, ids]
+    asset = env.scene[asset_cfg.name]
+    quat = asset.data.body_quat_w.torch[:, asset_cfg.body_ids, :]
+    num_envs, num_bodies = quat.shape[0], quat.shape[1]
+    gravity_w = torch.tensor(env.cfg.sim.gravity, device=quat.device, dtype=quat.dtype)
+    gravity_w = gravity_w / gravity_w.norm().clamp_min(1e-6)
+    gravity_b = math_utils.quat_apply_inverse(
+        quat.reshape(-1, 4), gravity_w.unsqueeze(0).expand(num_envs * num_bodies, -1)
+    ).reshape(num_envs, num_bodies, 3)
+    pitch = torch.asin(gravity_b[..., 0].clamp(-1.0, 1.0))
+    roll = torch.asin(gravity_b[..., 1].clamp(-1.0, 1.0))
+    lean = torch.relu(torch.abs(pitch - pitch_target) - tolerance) + torch.relu(torch.abs(roll) - tolerance)
+    return lean.mean(dim=-1)
 
 
-def stable_stand_hip_roll_norm(
-    env, asset_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
-    command_name: str = "twist", command_threshold: float = 0.1,
-    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
-    contact_force_threshold: float = 5.0,
-) -> torch.Tensor:
-    gate = _stand_gate(env, sensor_cfg, torso_cfg, command_name, command_threshold,
-                       planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
-    return torch.linalg.vector_norm(_joint_err(env, asset_cfg), dim=1) * gate
-
-
-def stable_stand_feet_fore_aft_l1(
-    env, feet_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
-    position_deadband: float = 0.02, command_name: str = "twist", command_threshold: float = 0.1,
-    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
-    contact_force_threshold: float = 5.0,
-) -> torch.Tensor:
-    feet_b = _feet_positions_b(env.scene[feet_cfg.name], feet_cfg)  # [N,2,3]
-    err = torch.relu(feet_b[:, :, 0].abs() - position_deadband).sum(dim=1)
-    gate = _stand_gate(env, sensor_cfg, torso_cfg, command_name, command_threshold,
-                       planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
-    return err * gate
-
-
-def stable_stand_feet_lateral_center_l1(
-    env, feet_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
-    center_deadband: float = 0.01, command_name: str = "twist", command_threshold: float = 0.1,
-    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
-    contact_force_threshold: float = 5.0,
-) -> torch.Tensor:
-    feet_b = _feet_positions_b(env.scene[feet_cfg.name], feet_cfg)
-    center = 0.5 * (feet_b[:, 0, 1] + feet_b[:, 1, 1])
-    err = torch.relu(center.abs() - center_deadband)
-    gate = _stand_gate(env, sensor_cfg, torso_cfg, command_name, command_threshold,
-                       planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
-    return err * gate
-
-
-def stand_torso_pitch_l2(
-    env, asset_cfg: SceneEntityCfg, command_name: str = "twist", command_threshold: float = 0.1,
-) -> torch.Tensor:
-    quat_w = env.scene[asset_cfg.name].data.body_quat_w.torch[:, asset_cfg.body_ids[0]]
-    g = torch.tensor(env.cfg.sim.gravity, device=env.device, dtype=quat_w.dtype)
-    g = g / g.norm().clamp_min(1e-6)
-    gravity_b = quat_apply_inverse(quat_w, g.unsqueeze(0).expand(env.num_envs, -1))
-    return gravity_b[:, 0].square() * _standing_mask(env, command_name, command_threshold).float()
-
-
-def zero_command_joint_l2(
-    env, asset_cfg: SceneEntityCfg, command_name: str = "twist", threshold: float = 0.05,
-) -> torch.Tensor:
-    cmd = env.command_manager.get_command(command_name)
-    magnitude = torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs()
-    return _joint_err(env, asset_cfg).square().sum(dim=1) * (magnitude < threshold).float()

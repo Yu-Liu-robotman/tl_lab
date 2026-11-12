@@ -11,7 +11,9 @@ import argparse
 import sys
 
 from isaaclab.app import AppLauncher
-
+import gymnasium as gym
+import numpy as np
+import torch
 # local imports
 import cli_args  # isort: skip
 
@@ -42,6 +44,10 @@ parser.add_argument(
 parser.add_argument(
     "--export_only", action="store_true", default=False, help="Export the policy (JIT/ONNX) and exit without playing."
 )
+parser.add_argument("--record_csv", type=str, default=None)
+parser.add_argument("--record_env", type=int, default=0)
+parser.add_argument("--record_steps", type=int, default=0)
+parser.add_argument("--skip_steps", type=int, default=100, help="开场先空跑多少步，跳过 reset 后的下落/抖动")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -301,9 +307,38 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     dt = env.unwrapped.step_dt
 
+    rows: list[np.ndarray] = []
+    record_path = None
+    record_ids = None
+    if args_cli.record_csv:
+        robot = env.unwrapped.scene["robot"]
+        record_path = os.path.abspath(os.path.expanduser(args_cli.record_csv))
+        os.makedirs(os.path.dirname(record_path), exist_ok=True)
+        sdk_names = list(getattr(env_cfg.scene.robot, "joint_sdk_names", []) or []) or list(robot.joint_names)
+        ids, names = robot.find_joints(sdk_names, preserve_order=True)
+        record_ids = torch.as_tensor(ids, dtype=torch.long, device=robot.device)
+        print(f"[RECORD] {record_path}")
+        print(f"[RECORD] env={args_cli.record_env} fps={1.0 / dt:.1f} dof={len(names)} {names}")
+
+    def record_frame() -> None:
+        i = args_cli.record_env
+        p = robot.data.root_pos_w.torch[i] - env.unwrapped.scene.env_origins[i]
+        q = robot.data.root_quat_w.torch[i]
+        dof = robot.data.joint_pos.torch[i][record_ids]
+        rows.append(torch.cat([p, q, dof]).cpu().numpy().astype(np.float64))
+
     # reset environment
     obs = env.get_observations()
+    if args_cli.skip_steps > 0:
+        with torch.inference_mode():
+            for _ in range(args_cli.skip_steps):
+                obs, _, dones, _ = env.step(policy(obs))
+                if version.parse(installed_version) >= version.parse("4.0.0"):
+                    policy.reset(dones)
+        print(f"[INFO] skipped {args_cli.skip_steps} warmup steps ({args_cli.skip_steps * dt:.2f} s)")
     timestep = 0
+    if record_path is not None:
+        record_frame()
     # simulate environment
     try:
         while True:
@@ -313,6 +348,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 obs, _, dones, _ = env.step(actions)
                 if version.parse(installed_version) >= version.parse("4.0.0"):
                     policy.reset(dones)
+            if record_path is not None and env.unwrapped.episode_length_buf[args_cli.record_env] >= args_cli.skip_steps:
+                record_frame()
+                if args_cli.record_steps and len(rows) >= args_cli.record_steps:
+                    break
             if args_cli.video:
                 timestep += 1
                 if timestep == args_cli.video_length:
@@ -321,10 +360,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             sleep_time = dt - (time.time() - start_time)
             if args_cli.real_time and sleep_time > 0:
                 time.sleep(sleep_time)
-
-        env.close()
     except KeyboardInterrupt:
         pass
+    finally:
+        if record_path is not None and rows:
+            out = np.asarray(rows, dtype=np.float64)
+            np.savetxt(record_path, out, delimiter=",", fmt="%.17g")
+            print(f"[RECORD] saved {out.shape[0]}x{out.shape[1]} -> {record_path}")
+        env.close()
 
 
 if __name__ == "__main__":

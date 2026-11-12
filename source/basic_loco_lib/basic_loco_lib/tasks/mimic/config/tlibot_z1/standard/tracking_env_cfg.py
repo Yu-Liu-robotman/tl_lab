@@ -39,6 +39,13 @@ from basic_loco_lib.tasks.amp.agents.rsl_rl_ppo_cfg import Z1_AMP_MOTION_DIR
 """
 python scripts/rsl_rl/train.py --task Tlibot-Z1-Mimic --viz none presets=newton 
 python scripts/rsl_rl/play.py --task Tlibot-Z1-Mimic --num_envs 10 --viz viser presets=newton
+
+python scripts/rsl_rl/play.py --task Tlibot-Z1-Mimic --num_envs 10 --viz None presets=newton \
+    --record_csv  data/z1_amp/test/output/csv/z1_forward.csv \
+    --record_steps 1000 \
+    --skip_steps 50 \
+    --load_run 2026-11-11_18-23-47-062 \
+
 """
 VELOCITY_RANGE = {
     "x": (-0.5, 0.5),
@@ -48,7 +55,7 @@ VELOCITY_RANGE = {
     "pitch": (-0.52, 0.52),
     "yaw": (-0.78, 0.78),
 }
-MOTION_FILE = f"{PROJECT_DIR}/data/z1_amp/test/output/npz/output11111115_smplx_z1_v1.npz"
+MOTION_FILE = f"{PROJECT_DIR}/data/z1_amp/test/output/npz/output.npz"
 ANCHOR_BODY_NAME = "base_link"
 TRACK_BODY_NAMES = [
     "base_link",
@@ -62,6 +69,7 @@ TRACK_BODY_NAMES = [
     # "arm_left_elbow_link",
     # "arm_right_elbow_link",
 ]
+
 ##
 
 @configclass
@@ -158,7 +166,7 @@ class RewardsCfg:
     # -- base
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
     joint_torque = RewTerm(func=mdp.joint_torques_l2, weight=-1e-5)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-1e-1)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-3e-1)
     joint_limit = RewTerm(
         func=mdp.joint_pos_limits,
         weight=-10.0,
@@ -197,14 +205,6 @@ class RewardsCfg:
         params={"command_name": "motion", "std": 3.14},
     )
     # ------
-    body_orientation_l2 = RewTerm(
-        func=mimic_rew.body_orientation_l2,
-        weight=-2.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="torso_yaw_link"),
-            "tolerance": 0.02,
-        },
-    )
     foot_width = RewTerm(
         func=mimic_rew.foot_lateral_width_excess,
         weight=-2.0,
@@ -245,8 +245,20 @@ class RewardsCfg:
     joint_deviation_torso = RewTerm(
         func=mdp.joint_deviation_l1,
         weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["torso_.*_joint"])},
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["torso_.*yaw.*_joint"])},
     )
+    body_orientation_l2 = RewTerm(
+        func=mimic_rew.body_orientation_l1,
+        weight=-10.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="torso_roll_link"),
+            "tolerance": 0.05,
+            "pitch_target": 0.08,
+        },
+    )
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-6.0)
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-1.0)
     # ------
     motion_knee_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,

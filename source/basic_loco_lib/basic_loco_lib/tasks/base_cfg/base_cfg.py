@@ -168,7 +168,7 @@ class PhysicsCfg(PresetCfg):
             use_mujoco_contacts=False,
         ),
         # mesh / heightfield terrain needs a non-zero collision margin.
-        default_shape_cfg=NewtonShapeCfg(margin=0.01),
+        # default_shape_cfg=NewtonShapeCfg(margin=0.01),
         collision_cfg=CollisionPipelineCfg(
             broad_phase="explicit",
             reduce_contacts=True,

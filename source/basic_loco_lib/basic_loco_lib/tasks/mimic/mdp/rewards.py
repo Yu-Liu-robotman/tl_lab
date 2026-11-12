@@ -296,20 +296,18 @@ def arm_swing_natural(
 
     return loss
 
-def body_orientation_l2(
-    env: ManagerBasedRLEnv,
-    asset_cfg: SceneEntityCfg,
-    tolerance: float = 0.0,
+def body_orientation_l1(
+    env, asset_cfg, tolerance: float = 0.02, pitch_target: float = 0.0
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     quat = asset.data.body_quat_w.torch[:, asset_cfg.body_ids, :]
     num_envs, num_bodies = quat.shape[0], quat.shape[1]
-
     gravity_w = torch.tensor(env.cfg.sim.gravity, device=quat.device, dtype=quat.dtype)
     gravity_w = gravity_w / gravity_w.norm().clamp_min(1e-6)
     gravity_b = math_utils.quat_apply_inverse(
         quat.reshape(-1, 4), gravity_w.unsqueeze(0).expand(num_envs * num_bodies, -1)
     ).reshape(num_envs, num_bodies, 3)
-
-    tilt = torch.relu(torch.abs(gravity_b[..., :2]) - tolerance)
-    return torch.sum(torch.square(tilt), dim=-1).mean(dim=-1)
+    pitch = torch.asin(gravity_b[..., 0].clamp(-1.0, 1.0))
+    roll = torch.asin(gravity_b[..., 1].clamp(-1.0, 1.0))
+    lean = torch.relu(torch.abs(pitch - pitch_target) - tolerance) + torch.relu(torch.abs(roll) - tolerance)
+    return lean.mean(dim=-1)

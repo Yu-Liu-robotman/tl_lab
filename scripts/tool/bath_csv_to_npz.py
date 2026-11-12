@@ -5,14 +5,15 @@ output_root/
  └── npz/      # AMP 可用：整机 29 关节 + 全部刚体 + joint_names/body_names/ordering
 
 python3 scripts/tool/bath_csv_to_npz.py \
-    --input_dir data/z1_amp/test \
-    --output_dir data/z1_amp/test/output \
-    --input_fps 15 \
+    --input_dir data/z1_amp/test/output/csv \
+    --output_dir data/z1_amp/output/npz \
+    --input_fps 50 \
     --output_fps 50 \
     --robot z1 \
     --backend newton \
     --overwrite \
-    --pos_z_offset 0.025 \
+    --viz kit \
+    --pos_z_offset -0.02 \
     --viz kit \
     --frame_range 30 110
 
