@@ -63,16 +63,16 @@ TLIBOT_Z1_ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     use_cache=False,
     curriculum=True,
     sub_terrains={
-        # "flat": terrain_gen.HfRandomUniformTerrainCfg(
-        #     proportion=0.50,
-        #     noise_range=(0.0, 0.0),
-        #     noise_step=0.005,
-        #     downsampled_scale=0.2,
-        #     border_width=0.25,
-        # ),
+        "flat": terrain_gen.HfRandomUniformTerrainCfg(
+            proportion=0.50,
+            noise_range=(0.0, 0.0),
+            noise_step=0.005,
+            downsampled_scale=0.2,
+            border_width=0.25,
+        ),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=1.0,
-            noise_range=(-0.02, 0.02),
+            proportion=0.5,
+            noise_range=(-0.02, 0.03),
             noise_step=0.005,
             downsampled_scale=0.2,
             border_width=0.25,

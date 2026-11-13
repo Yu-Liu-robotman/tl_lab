@@ -41,7 +41,7 @@ python scripts/rsl_rl/train.py --task Tlibot-Z1-Mimic --viz none presets=newton
 python scripts/rsl_rl/play.py --task Tlibot-Z1-Mimic --num_envs 10 --viz viser presets=newton
 
 python scripts/rsl_rl/play.py --task Tlibot-Z1-Mimic --num_envs 10 --viz None presets=newton \
-    --record_csv  data/z1_amp/test/output/csv/z1_forward.csv \
+    --record_csv  /home/user/LY/z1_forward.csv \
     --record_steps 1000 \
     --skip_steps 50 \
     --load_run 2026-11-11_18-23-47-062 \
@@ -163,35 +163,101 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # ---- tracking（唯一主导项）----
-    motion_global_anchor_pos = RewTerm(func=mdp.motion_global_anchor_position_error_exp, weight=0.5,
-        params={"command_name": "motion", "std": 0.3})
-    motion_global_anchor_ori = RewTerm(func=mdp.motion_global_anchor_orientation_error_exp, weight=0.5,
-        params={"command_name": "motion", "std": 0.4})
-    motion_body_pos = RewTerm(func=mdp.motion_relative_body_position_error_exp, weight=1.0,
-        params={"command_name": "motion", "std": 0.3})
-    motion_body_ori = RewTerm(func=mdp.motion_relative_body_orientation_error_exp, weight=1.0,
-        params={"command_name": "motion", "std": 0.4})
-    motion_body_lin_vel = RewTerm(func=mdp.motion_global_body_linear_velocity_error_exp, weight=0.5,
-        params={"command_name": "motion", "std": 1.0})
-    motion_body_ang_vel = RewTerm(func=mdp.motion_global_body_angular_velocity_error_exp, weight=0.5,
-        params={"command_name": "motion", "std": 3.14})
-    motion_joint_pos = RewTerm(func=mdp.motion_joint_pos_error_exp, weight=0.5,
-        params={"command_name": "motion", "std": 0.25,
-                "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
-
-    # ---- feasibility（贴边，权重小）----
-    joint_limit = RewTerm(func=mdp.joint_pos_limits, weight=-5.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])})
-    joint_torque = RewTerm(func=mdp.joint_torques_l2, weight=-1e-5)
+    # -- base
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-5e-2)
-    # energy = RewTerm(func=mdp.energy, weight=-2e-5)
+    # joint_torque = RewTerm(func=mdp.joint_torques_l2, weight=-1e-5)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.001)
+    joint_limit = RewTerm(func=mdp.joint_pos_limits, weight=-1.0,params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*"])},)
 
-    # # ---- 数据清洗（只治滑步/穿地）----
-    # feet_slide = RewTerm(func=mdp.feet_slide, weight=-1e-1,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
-    #             "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")})
+    # -- tracking
+    motion_global_anchor_pos = RewTerm(
+        func=mdp.motion_global_anchor_position_error_exp,
+        weight=0.5,
+        params={"command_name": "motion", "std": 0.3},
+    )
+    motion_global_anchor_ori = RewTerm(
+        func=mdp.motion_global_anchor_orientation_error_exp,
+        weight=0.5,
+        params={"command_name": "motion", "std": 0.4},
+    )
+    motion_body_pos = RewTerm(
+        func=mdp.motion_relative_body_position_error_exp,
+        weight=1.0,
+        params={"command_name": "motion", "std": 0.3},
+    )
+    motion_body_ori = RewTerm(
+        func=mdp.motion_relative_body_orientation_error_exp,
+        weight=1.0,
+        params={"command_name": "motion", "std": 0.4},
+    )
+    motion_body_lin_vel = RewTerm(
+        func=mdp.motion_global_body_linear_velocity_error_exp,
+        weight=1.0,
+        params={"command_name": "motion", "std": 1.0},
+    )
+    motion_body_ang_vel = RewTerm(
+        func=mdp.motion_global_body_angular_velocity_error_exp,
+        weight=1.0,
+        params={"command_name": "motion", "std": 3.14},
+    )
+    # ------
+    arm_clear_body = RewTerm(func=mimic_rew.arm_clear_body, weight=-1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", preserve_order=True, joint_names=[
+                "arm_left_shoulder_roll_joint", "arm_right_shoulder_roll_joint",
+                "arm_left_shoulder_yaw_joint", "arm_right_shoulder_yaw_joint",
+                "arm_left_elbow_joint", "arm_right_elbow_joint"]),
+            "roll_offset": 0.05, "roll_gain": 2.0,
+            "elbow_deadband": 0.2, "elbow_vel_gain": 0.0,
+            "command_threshold": 0,
+        })
+    arm_swing_natural = RewTerm(
+        func=mimic_rew.arm_swing_natural,
+        weight=-1.0,
+        params={
+            "sh_cfg": SceneEntityCfg("robot", preserve_order=True,
+                joint_names=["arm_left_shoulder_pitch_joint", "arm_right_shoulder_pitch_joint"]),
+            "hip_cfg": SceneEntityCfg("robot", preserve_order=True,
+                joint_names=["leg_left_hip_pitch_joint", "leg_right_hip_pitch_joint"]),
+            "elbow_cfg": SceneEntityCfg("robot", preserve_order=True,
+                joint_names=["arm_left_elbow_joint", "arm_right_elbow_joint"]),
+            "swing_gain": 0.7, "max_swing": 0.8, "max_swing_back": 0.30,
+            "swing_bias": -0.05, "lead_time": 0.05, "smooth_alpha": 0.02,
+            "arm_vel_gain": 0.02, "elbow_ratio": 0.22, "elbow_sign": 1.0,
+            "elbow_vel_gain": 0.01, "command_threshold": 0,
+        },
+    )
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-1.0)
+    # ------
+    motion_knee_pos = RewTerm(
+        func=mdp.motion_relative_body_position_error_exp,
+        weight=0.25,
+        params={
+            "command_name": "motion",
+            "std": 0.15,
+            "body_names": ["leg_left_knee_link", "leg_right_knee_link"],
+        },
+    )
+    motion_knee_ori = RewTerm(
+        func=mdp.motion_relative_body_orientation_error_exp,
+        weight=0.25,
+        params={
+            "command_name": "motion",
+            "std": 0.20,
+            "body_names": ["leg_left_knee_link", "leg_right_knee_link"],
+        },
+    )
+    motion_joint_pos = RewTerm(
+        func=mdp.motion_joint_pos_error_exp,
+        weight=0.8,
+        params={
+            "command_name": "motion",
+            "std": 0.25,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=["leg_.*_joint"]),
+        },
+    )
 
 @configclass
 class TerminationsCfg:

@@ -205,7 +205,14 @@ def _standing_mask(env, command_name: str = "twist", command_threshold: float = 
     return torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs() <= command_threshold
 
 def body_orientation_l1(
-    env, asset_cfg, tolerance: float = 0.02, pitch_target: float = 0.0
+    env,
+    asset_cfg,
+    tolerance: float = 0.02,
+    pitch_target: float = 0.0,
+    command_name: str = "twist",
+    command_threshold: float = 0.1,
+    vel_threshold: float = 0.0,
+    angvel_threshold: float = 0.0,
 ) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     quat = asset.data.body_quat_w.torch[:, asset_cfg.body_ids, :]
@@ -218,7 +225,14 @@ def body_orientation_l1(
     pitch = torch.asin(gravity_b[..., 0].clamp(-1.0, 1.0))
     roll = torch.asin(gravity_b[..., 1].clamp(-1.0, 1.0))
     lean = torch.relu(torch.abs(pitch - pitch_target) - tolerance) + torch.relu(torch.abs(roll) - tolerance)
-    return lean.mean(dim=-1)
+    active = _standing_mask(env, command_name, command_threshold).float()
+    if vel_threshold > 0.0:    
+        speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=-1)
+        active = active * (speed < vel_threshold).float()
+    if angvel_threshold > 0.0: 
+        rate = torch.linalg.vector_norm(asset.data.root_ang_vel_b.torch, dim=-1)
+        active = active * (rate < angvel_threshold).float()
+    return lean.mean(dim=-1) * active
 
 
 def foot_step_home_exp(

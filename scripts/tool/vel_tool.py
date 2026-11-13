@@ -22,8 +22,10 @@ CSV 里没有速度列，vx/vy/wz 由根位置/偏航的数值差分得到，再
 
 
 python scripts/tool/vel_tool.py \
-    data/z1_amp/test/test2 \
+    data/z1_amp/50/z1_forward_v084.csv \
     --csv-fps 50 \
+    --amp-target-vx  0.5
+    --scale 0.6 
     --amp-target-vx  0.75
 
 """

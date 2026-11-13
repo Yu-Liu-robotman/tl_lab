@@ -30,7 +30,7 @@ from basic_loco_lib.tasks.base_cfg.base_cfg import (
     RobotSceneCfg,
 )
 from basic_loco_lib.tasks.velocity import mdp
-from basic_loco_lib.tasks.velocity.terrain import DWAQ_HARD_TERRAINS_CFG as TERRAIN_CFG
+from basic_loco_lib.tasks.velocity.terrain import TLIBOT_Z1_ROUGH_TERRAINS_CFG as TERRAIN_CFG
 
 ##
 # Actions
@@ -58,17 +58,18 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
         rel_standing_envs=0.20, # 站立占比
-        rel_turning_envs=0.0,   # 原地转向占比
+        rel_turning_envs=0.2,   # 原地转向占比
         rel_lateral_envs=0.0,   # 横移占比
-        rel_heading_envs=0.1,   # 朝向占比
-        heading_command=True,
+        rel_heading_envs=0.0,   # 朝向占比
+        heading_command=False,
         debug_vis=False,
         ranges=amp_commands.AmpVelocityCommandCfg.Ranges(
             # forward only, and kept away from 0 so it is never a "fake stand" bucket
             lin_vel_x=(-0.6, 1.0),
             lin_vel_y=(0.0, 0.0),
             ang_vel_z=(-0.6, 0.6),
-            heading=(-math.pi / 2, math.pi / 2),
+            # heading=(-math.pi / 2, math.pi / 2),
+            heading=(-0, 0),
             pure_turn_ang_vel=(-0.6, 0.6),    # 纯转向桶
             pure_lateral_lin_vel=(-0.3, 0.3), # 纯横移桶
         ), 
@@ -172,10 +173,10 @@ class ObservationsCfg:
 class RewardsCfg:
     track_anchor_lin_vel = RewTerm(
         func=amp_rewards.track_anchor_linear_velocity,
-        weight=1.0,
+        weight=1.5,
         params={
             "command_name": "twist",
-            "std": 0.3,
+            "std": 0.5,
             "mask_delay": True,
             "delay_env_rew_ratio": 0.0,
             "anchor_cfg": SceneEntityCfg("robot", body_names=_ANCHOR_NAME),
@@ -183,10 +184,10 @@ class RewardsCfg:
     )
     track_anchor_ang_vel = RewTerm(
         func=amp_rewards.track_anchor_angular_velocity,
-        weight=1.0,
+        weight=1.5,
         params={
             "command_name": "twist",
-            "std": 1.0,
+            "std": 0.5,
             "mask_delay": True,
             "delay_env_rew_ratio": 0.0,
             "anchor_cfg": SceneEntityCfg("robot", body_names=_ANCHOR_NAME),
@@ -228,13 +229,14 @@ class RewardsCfg:
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")},
     )
     # ------------------------------------------------------------------------------------------
-    body_orientation_l2 = RewTerm(
+    body_orientation_l1 = RewTerm(
         func=amp_rewards.body_orientation_l1,
         weight=-1.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="torso_roll_link"),
-            "tolerance": 0.05,
-            "pitch_target": 0,
+            "asset_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
+            "tolerance": 0.05,"pitch_target": 0.0,
+            "vel_threshold": 0.2,      
+            "angvel_threshold": 0.5,
         },
     )
     # -- base
@@ -306,12 +308,12 @@ class RobotEnvCfg(BaseRobotEnvCfg):
                 "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
             },
         )
-        self.events.push_robot.interval_range_s = (3.0, 5.0)
+        self.events.push_robot.interval_range_s = (5.0, 10.0)
         self.events.push_robot.params = {"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}}        # IMU mounting / zero bias, resampled every episode (actor observations only)
         self.events.imu_bias = EventTerm(
             func=amp_events.randomize_imu_bias,
             mode="reset",
-            params={"rpy_max": (0.025, 0.025, 0.0), "angvel_bias_max": 0.025},
+            params={"rpy_max": (0.020, 0.02, 0.0), "angvel_bias_max": 0.020},
         )
         motion_dir = Path(Z1_AMP_MOTION_DIR)
         if not motion_dir.is_dir():
