@@ -31,7 +31,7 @@ DAMPING_RH53 = 2.0 * DAMPING_RATIO * ARMATURE_RH53 * NATURAL_FREQ
 Z129DOF = TlibotArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         # usd_path=f"{ASSETS_DIR}/z1_29dof/usd/z1_v1/z1_v1.usda",
-        usd_path=f"{ASSETS_DIR}/z1_29dof/usd/29dof_add_shoe/z1_v1_add_shoe/z1_v1_add_shoe.usda",
+        usd_path=f"{ASSETS_DIR}/z1_29dof/usd/z1_v1_add_shoe_v1/z1_v1_add_shoe_v1.usda",
         activate_contact_sensors=True,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -48,7 +48,7 @@ Z129DOF = TlibotArticulationCfg(
     ),
     
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.865),
+        pos=(0.0, 0.0, 0.870),
         joint_pos={
             "leg_left_hip_pitch_joint": -0.03,
             "leg_left_hip_roll_joint": 0.0,

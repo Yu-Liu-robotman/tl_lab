@@ -5,16 +5,15 @@ output_root/
  └── npz/      # AMP 可用：整机 29 关节 + 全部刚体 + joint_names/body_names/ordering
 
 python3 scripts/tool/bath_csv_to_npz.py \
-    --input_dir data/z1_amp/50 \
-    --output_dir data/z1_amp/50/npz \
-    --input_fps 50 \
+    --input_dir /home/user/Desktop/tl_robot_model/z1/motion_data/csv/30fps \
+    --output_dir data/z1_amp/output \
+    --input_fps 30 \
     --output_fps 50 \
     --robot z1 \
     --backend newton \
     --overwrite \
     --viz kit \
     --pos_z_offset 0.02 \
-    --viz kit \
     --frame_range 30 110
 
 注意：npz 的关节/刚体列顺序由 --backend 决定（会写入 ordering 字段）；

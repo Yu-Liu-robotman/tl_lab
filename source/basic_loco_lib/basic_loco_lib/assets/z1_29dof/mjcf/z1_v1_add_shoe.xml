@@ -8,13 +8,13 @@
     <mesh name="leg_left_hip_yaw_link" content_type="model/stl" file="../meshes/leg_left_hip_yaw_link.STL"/>
     <mesh name="leg_left_knee_link" content_type="model/stl" file="../meshes/leg_left_knee_link.STL"/>
     <mesh name="leg_left_ankle_pitch_link" file="../meshes/leg_left_ankle_pitch_link.STL"/>
-    <mesh name="leg_left_ankle_roll_link" file="../meshes/leg_left_ankle_roll_link.STL"/>
+    <mesh name="leg_left_ankle_roll_link" file="../meshes/leg_left_ankle_roll_link.STL" scale="1.1 1.4 1.05"/>
     <mesh name="leg_right_hip_pitch_link" content_type="model/stl" file="../meshes/leg_right_hip_pitch_link.STL"/>
     <mesh name="leg_right_hip_roll_link" content_type="model/stl" file="../meshes/leg_right_hip_roll_link.STL"/>
     <mesh name="leg_right_hip_yaw_link" content_type="model/stl" file="../meshes/leg_right_hip_yaw_link.STL"/>
     <mesh name="leg_right_knee_link" content_type="model/stl" file="../meshes/leg_right_knee_link.STL"/>
     <mesh name="leg_right_ankle_pitch_link" file="../meshes/leg_right_ankle_pitch_link.STL"/>
-    <mesh name="leg_right_ankle_roll_link" file="../meshes/leg_right_ankle_roll_link.STL"/>
+    <mesh name="leg_right_ankle_roll_link" file="../meshes/leg_right_ankle_roll_link.STL" scale="1.1 1.4 1.05"/>
     <mesh name="torso_yaw_link" content_type="model/stl" file="../meshes/torso_yaw_link.STL"/>
     <mesh name="torso_pitch_link" file="../meshes/torso_pitch_link.STL"/>
     <mesh name="torso_roll_link" content_type="model/stl" file="../meshes/torso_roll_link.STL"/>
@@ -37,7 +37,7 @@
   </asset>
 
   <worldbody>
-    <body name="base_link" pos="0 0 0.865">
+    <body name="base_link" pos="0 0 0.87 ">
       <inertial pos="-0.0244871 0.00866503 0.0969105" quat="0.92938 -0.0615525 0.039973 0.361754" mass="3.87319" diaginertia="0.0125693 0.0121411 0.0071223"/>
       <joint name="floating_base_joint" type="free"/>
       <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="base_link"/>
@@ -65,20 +65,18 @@
               <body name="leg_left_ankle_pitch_link" pos="0 0 -0.40612">
                 <inertial pos="-0.00881893 0.00086662 -0.0122075" quat="-0.000193763 0.809999 -8.76896e-05 0.586432" mass="0.549" diaginertia="0.00045111 0.00044302 0.00024817"/>
                 <joint name="leg_left_ankle_pitch_joint" pos="0 0 0" axis="0 1 0" range="-0.6 0.6" actuatorfrcrange="-50 50" armature="0.1" frictionloss="0.01" damping="0.01"/>
-                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="leg_left_ankle_pitch_link"/>
-                <body name="leg_left_ankle_roll_link" pos="0 0.00087435 -0.027">
-                  <inertial pos="0.0495242 -0.00057408 -0.0219408" quat="0.00316988 0.7167 -0.00541198 0.697353" mass="0.4392" diaginertia="0.00185321 0.00178339 0.000251396"/>
-                  <joint name="leg_left_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.3 0.3" actuatorfrcrange="-30 30" armature="0.1" frictionloss="0.01" damping="0.01"/>
-                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="leg_left_ankle_roll_link"/>
-                  <geom name="l_shoe_vis" pos="0.06 0 -0.055" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.85 0.85 0.85 1" mesh="shoe_left"/>
-                  <geom name="l_foot_1" size="0.005" pos="-0.05 0.0335 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="l_foot_2" size="0.005" pos="-0.06 -0.0375 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="l_foot_3" size="0.005" pos="0.16 0.0375 -0.04" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="l_foot_4" size="0.005" pos="0.16 -0.0375 -0.04" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="l_foot_5" size="0.005" pos="0.1 -0.0375 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="l_foot_6" size="0.005" pos="0.1 0.0475 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="l_foot_7" size="0.075 0.0325 0.02" pos="0.03 0.005 -0.03" type="box" rgba="0.85 0.85 0.85 1"/>
-                  <site name="lf_force" size="0.01" pos="0.0 0.0 -0.035" />
+
+              <body name="leg_left_ankle_roll_link" pos="0 0.00087435 -0.027">
+                <inertial pos="0.0495242 -0.00057408 -0.0219408" quat="0.00316988 0.7167 -0.00541198 0.697353" mass="0.4392" diaginertia="0.00185321 0.00178339 0.000251396"/>
+                <joint name="leg_left_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.3 0.3" actuatorfrcrange="-30 30" armature="0.1" frictionloss="0.01" damping="0.01"/>
+                <geom pos="0 0 -0.02" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="leg_left_ankle_roll_link"/>
+                <geom name="l_foot_1" size="0.005" pos="-0.055 0.025 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="l_foot_2" size="0.005" pos="-0.055 -0.025 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="l_foot_3" size="0.005" pos="0.13 0.03 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="l_foot_4" size="0.005" pos="0.13 -0.035 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="l_foot_5" size="0.005" pos="0.16 0 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="l_foot_6" size="0.0775 0.03 0.015" pos="0.045 0 -0.046" type="box" rgba="0.8 0.8 0.8 1"/>
+                  <site name="lf_force" size="0.01" pos="0.0 0.0 -0.056" />
                 </body>
               </body>
             </body>
@@ -107,19 +105,17 @@
               <body name="leg_right_ankle_pitch_link" pos="0 0 -0.40612">
                 <inertial pos="-0.00881893 -0.00086662 -0.0122075" quat="0.000193763 0.809999 8.76896e-05 0.586432" mass="0.549" diaginertia="0.00045111 0.00044302 0.00024817"/>
                 <joint name="leg_right_ankle_pitch_joint" pos="0 0 0" axis="0 1 0" range="-0.6 0.6" actuatorfrcrange="-50 50" armature="0.1" frictionloss="0.01" damping="0.01"/>
-                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="leg_right_ankle_pitch_link"/>
-                <body name="leg_right_ankle_roll_link" pos="0 -0.00087435 -0.027">
-                  <inertial pos="0.0495242 0.00057408 -0.0219408" quat="-0.00316988 0.7167 0.00541198 0.697353" mass="0.4392" diaginertia="0.00185321 0.00178339 0.000251396"/>
-                  <joint name="leg_right_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.3 0.3" actuatorfrcrange="-30 30" armature="0.1" frictionloss="0.01" damping="0.01"/>
-                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="leg_right_ankle_roll_link"/>
-                  <geom name="r_shoe_vis" pos="0.06 0 -0.055" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.85 0.85 0.85 1" mesh="shoe_right"/>
-                  <geom name="r_foot_1" size="0.005" pos="-0.06 0.0375 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="r_foot_2" size="0.005" pos="-0.05 -0.0335 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="r_foot_3" size="0.005" pos="0.16 -0.0375 -0.04" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="r_foot_4" size="0.005" pos="0.16 0.0375 -0.04" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="r_foot_5" size="0.005" pos="0.1 -0.0475 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="r_foot_6" size="0.005" pos="0.1 0.0375 -0.05" rgba="0.85 0.85 0.85 1"/>
-                  <geom name="r_foot_7" size="0.075 0.0325 0.02" pos="0.03 -0.005 -0.03" type="box" rgba="0.85 0.85 0.85 1"/>
+         
+              <body name="leg_right_ankle_roll_link" pos="0 -0.00087435 -0.027">
+                <inertial pos="0.0495242 0.00057408 -0.0219408" quat="-0.00316988 0.7167 0.00541198 0.697353" mass="0.4392" diaginertia="0.00185321 0.00178339 0.000251396"/>
+                <joint name="leg_right_ankle_roll_joint" pos="0 0 0" axis="1 0 0" range="-0.3 0.3" actuatorfrcrange="-30 30" armature="0.1" frictionloss="0.01" damping="0.01"/>
+                <geom pos="0 0 -0.02" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.8 0.8 0.8 1" mesh="leg_right_ankle_roll_link"/>
+                <geom name="r_foot_1" size="0.005" pos="-0.055 0.025 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="r_foot_2" size="0.005" pos="-0.055 -0.025 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="r_foot_3" size="0.005" pos="0.13 0.03 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="r_foot_4" size="0.005" pos="0.13 -0.035 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="r_foot_5" size="0.005" pos="0.16 0 -0.056" rgba="0.8 0.8 0.8 1"/>
+                <geom name="r_foot_6" size="0.0775 0.03 0.015" pos="0.045 0 -0.046" type="box" rgba="0.8 0.8 0.8 1"/>
                   <site name="rf_force" size="0.01" pos="0.0 0.0 -0.035" />
                 </body>
               </body>

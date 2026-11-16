@@ -282,6 +282,7 @@ class CurriculumCfg:
 @configclass
 class RobotEnvCfg(ManagerBasedRLEnvCfg):
     ignored_action_joints: tuple[str, ...] = ()
+    ignored_amp_joints: tuple[str, ...] = ()
     sim: SimulationCfg = SimulationCfg(physics=PhysicsCfg())
     scene: RobotSceneCfg = RobotSceneCfg(num_envs=4096, env_spacing=2.5)
     actions: ActionsCfg = ActionsCfg()
@@ -312,7 +313,35 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
             generator.curriculum = getattr(curriculum, "terrain_levels", None) is not None
 
         self._apply_ignored_action_joints()
-
+        self._apply_ignored_amp_joints()
+        
+    def _apply_ignored_amp_joints(self) -> None:
+        patterns = tuple(self.ignored_amp_joints or ())
+        observations = getattr(self, "observations", None)
+        if not patterns or observations is None:
+            return
+        dropped: list[str] = []
+        for group in vars(observations).values():
+            if not isinstance(group, ObsGroup):
+                continue
+            for term in vars(group).values():
+                if not isinstance(term, ObsTerm) or not term.params:
+                    continue
+                for cfg in term.params.values():
+                    names = getattr(cfg, "body_names", None)
+                    # 只处理"一组 body"（AMP 风格特征）；anchor 是 str，自动跳过
+                    if not isinstance(names, (list, tuple)) or len(names) < 2:
+                        continue
+                    kept = [name for name in names if not any(re.fullmatch(p, name) for p in patterns)]
+                    if len(kept) == len(names):
+                        continue
+                    if not kept:
+                        raise ValueError(f"ignored_amp_joints={patterns} 把 body 列表全部过滤掉了")
+                    dropped.extend(n for n in names if n not in kept)
+                    cfg.body_names = kept
+        if dropped:
+            print(f"[INFO] AMP bodies ignored: {sorted(set(dropped))}") 
+              
     def _apply_ignored_action_joints(self) -> None:
         all_joints = list(getattr(self.scene.robot, "joint_sdk_names", None) or [])
         if not all_joints:

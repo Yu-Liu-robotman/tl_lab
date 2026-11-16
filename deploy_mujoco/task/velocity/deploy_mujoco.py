@@ -79,6 +79,44 @@ def print_body_lin_vel(m, d, body_name, command):
     )
 
 
+def body_pitch_roll_deg(m, d, body_name, ref_body_name=None):
+    """Pitch / roll [deg] of a body, optionally measured relative to ``ref_body_name``.
+
+    Same convention as the training rewards (``pitch = asin(g_b.x)``):
+    ``pitch < 0`` = leaning back, ``pitch > 0`` = leaning forward.
+    """
+    bid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    if bid < 0:
+        raise ValueError(f"unknown body '{body_name}'")
+    rot = quat_to_mat(d.xquat[bid])  # body -> world
+    if ref_body_name is not None:
+        rid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, ref_body_name)
+        if rid < 0:
+            raise ValueError(f"unknown body '{ref_body_name}'")
+        rot = quat_to_mat(d.xquat[rid]).T @ rot  # ref -> body
+    g_b = rot.T @ np.array([0.0, 0.0, -1.0])
+    return (
+        float(np.degrees(np.arcsin(np.clip(g_b[0], -1.0, 1.0)))),
+        float(np.degrees(np.arcsin(np.clip(g_b[1], -1.0, 1.0)))),
+    )
+
+
+def print_body_orientation(m, d, root_body_name, extra_bodies=()):
+    """Print base verticality (world) and per-body verticality relative to the root.
+
+    The ``(rel)`` numbers use the same frame as ``body_orientation_l1(relative_to_root=True)``,
+    so at the default stance they should read ~0 deg.
+    """
+    pitch, roll = body_pitch_roll_deg(m, d, root_body_name)
+    parts = [f"base({root_body_name}) pitch={pitch:+6.2f}deg roll={roll:+6.2f}deg"]
+    for name in extra_bodies:
+        if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, name) < 0:
+            continue
+        p, r = body_pitch_roll_deg(m, d, name, ref_body_name=root_body_name)
+        parts.append(f"{name}(rel) pitch={p:+6.2f}deg roll={r:+6.2f}deg")
+    print(f"[ori] t={d.time:6.2f}s  " + "  ".join(parts))
+
+
 def viewer_setup(viewer, model, cam, track_body_name):
     """Apply the yaml 'viewer:' camera block; track the root body."""
     viewer.cam.distance = cam["distance"]
@@ -274,6 +312,9 @@ def main():
 
     mj_joint_names = [str(n) for n in config["mj_joint_names"]]
     root_body_name = str(config["root_body_name"])
+    # Bodies whose verticality is printed next to the base (measured relative to the root).
+    # Override in <robot>.yaml with e.g. ``orientation_bodies: [torso_roll_link]``.
+    orientation_bodies = [str(n) for n in config.get("orientation_bodies", ["torso_roll_link", "torso_pitch_link"])]
     num_joints = len(mj_joint_names)
     backend = config["backend"]
     print(f"Policy backend (joint order): {backend}")
@@ -369,6 +410,7 @@ def main():
                 )
                 if timestep % print_every_steps == 0:
                     print_body_lin_vel(m, d, root_body_name, command)
+                    print_body_orientation(m, d, root_body_name, orientation_bodies)
 
             # PD control at physics rate.
             tau = pd_control(

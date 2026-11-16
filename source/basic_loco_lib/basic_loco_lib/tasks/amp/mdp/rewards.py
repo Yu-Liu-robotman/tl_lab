@@ -29,6 +29,21 @@ def _command_mode(env, command_name: str) -> torch.Tensor | None:
         return None
     return getattr(term, "command_mode", None)
 
+def _standing_mask(env, command_name: str = "twist", command_threshold: float = 0.1) -> torch.Tensor:
+    """站立掩码：优先用 AmpVelocityCommand 的 command_mode，否则退回指令幅值。"""
+    mode = _command_mode(env, command_name)
+    if mode is not None:
+        return mode == COMMAND_MODE_STANDING
+    cmd = env.command_manager.get_command(command_name)
+    return torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs() <= command_threshold
+
+def _turning_mask(env, command_name: str = "twist", command_threshold: float = 0.15) -> torch.Tensor:
+    """原地转向掩码：优先用 command_mode，否则退回 |wz| 阈值。"""
+    mode = _command_mode(env, command_name)
+    if mode is not None:
+        return mode == COMMAND_MODE_TURNING
+    return env.command_manager.get_command(command_name)[:, 2].abs() > command_threshold
+
 def track_anchor_linear_velocity(
     env,
     command_name: str,
@@ -64,7 +79,6 @@ def track_anchor_angular_velocity(
     error = (command[:, 2] - velocity[:, 2]).square() + local_velocity[:, :2].square().sum(dim=-1)
     reward = torch.exp(-error / std**2)
     return _mask_by_delay(env, reward, delay_env_rew_ratio) if mask_delay else reward
-
 
 def track_root_height(env, std: float, mask_delay: bool = True, delay_env_rew_ratio: float = 3.5) -> torch.Tensor:
     asset = env.scene["robot"]
@@ -195,46 +209,6 @@ def _feet_positions_b(asset, feet_cfg: SceneEntityCfg) -> torch.Tensor:
     feet_b = quat_apply_inverse(quat_rep, rel_w_flat).reshape(n, k, 3)
     return feet_b
 
-
-def _standing_mask(env, command_name: str = "twist", command_threshold: float = 0.1) -> torch.Tensor:
-    """站立掩码：优先用 AmpVelocityCommand 的 command_mode，否则退回指令幅值。"""
-    mode = _command_mode(env, command_name)
-    if mode is not None:
-        return mode == COMMAND_MODE_STANDING
-    cmd = env.command_manager.get_command(command_name)
-    return torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs() <= command_threshold
-
-def body_orientation_l1(
-    env,
-    asset_cfg,
-    tolerance: float = 0.02,
-    pitch_target: float = 0.0,
-    command_name: str = "twist",
-    command_threshold: float = 0.1,
-    vel_threshold: float = 0.0,
-    angvel_threshold: float = 0.0,
-) -> torch.Tensor:
-    asset = env.scene[asset_cfg.name]
-    quat = asset.data.body_quat_w.torch[:, asset_cfg.body_ids, :]
-    num_envs, num_bodies = quat.shape[0], quat.shape[1]
-    gravity_w = torch.tensor(env.cfg.sim.gravity, device=quat.device, dtype=quat.dtype)
-    gravity_w = gravity_w / gravity_w.norm().clamp_min(1e-6)
-    gravity_b = math_utils.quat_apply_inverse(
-        quat.reshape(-1, 4), gravity_w.unsqueeze(0).expand(num_envs * num_bodies, -1)
-    ).reshape(num_envs, num_bodies, 3)
-    pitch = torch.asin(gravity_b[..., 0].clamp(-1.0, 1.0))
-    roll = torch.asin(gravity_b[..., 1].clamp(-1.0, 1.0))
-    lean = torch.relu(torch.abs(pitch - pitch_target) - tolerance) + torch.relu(torch.abs(roll) - tolerance)
-    active = _standing_mask(env, command_name, command_threshold).float()
-    if vel_threshold > 0.0:    
-        speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=-1)
-        active = active * (speed < vel_threshold).float()
-    if angvel_threshold > 0.0: 
-        rate = torch.linalg.vector_norm(asset.data.root_ang_vel_b.torch, dim=-1)
-        active = active * (rate < angvel_threshold).float()
-    return lean.mean(dim=-1) * active
-
-
 def foot_step_home_exp(
     env,
     sensor_cfg: SceneEntityCfg,
@@ -262,3 +236,169 @@ def foot_step_home_exp(
 
     active = _standing_mask(env, command_name, command_threshold).float()
     return reward.sum(dim=-1) * active
+
+def adaptive_flat_orientation_l2(env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    gravity_xy = asset.data.projected_gravity_b.torch[:, :2]
+    reward = torch.sum(torch.square(gravity_xy), dim=1)
+    scale = _standing_mask(env).float() * 3.0
+    return reward * scale
+
+def _huber(e: torch.Tensor, delta: float = 0.05) -> torch.Tensor:
+    """|e|<delta 时退化成 L2（梯度随误差趋零，不振荡），否则同 L1。"""
+    a = e.abs()
+    return torch.where(a < delta, 0.5 * a.square() / delta, a - 0.5 * delta)
+
+def arm_swing_natural(
+    env, sh_cfg, hip_cfg,                       # joint_ids: [L, R] shoulder_pitch / hip_pitch
+    swing_gain: float = 1.0, max_swing: float = 0.30, lead_time: float = 0.0,
+    smooth_alpha: float = 0.18, arm_vel_gain: float = 0.03,
+    elbow_cfg=None, elbow_ratio: float = 0.35, elbow_sign: float = 1.0, elbow_vel_gain: float = 0.01,
+    swing_bias: float = 0.0, max_swing_back: float | None = None, max_swing_fwd: float | None = None,
+    center_alpha: float = 0.0, huber: float = 0.05, gate_width: float = 0.10,
+    elbow_lag: float = 0.0, command_name: str = "twist", command_threshold: float = 0.1,
+) -> torch.Tensor:
+    """肩 pitch 与同侧 hip pitch 反相摆动：去直流 + tanh 软饱和 + 平滑，肘可滞后跟随。"""
+    asset = env.scene[sh_cfg.name]
+    for cfg in (sh_cfg, hip_cfg):
+        assert not isinstance(cfg.joint_ids, slice) and len(cfg.joint_ids) == 2, "需要 [left, right] 两个关节"
+
+    q0, q, qv = asset.data.default_joint_pos.torch, asset.data.joint_pos.torch, asset.data.joint_vel.torch
+    d_sh, v_sh = q[:, sh_cfg.joint_ids] - q0[:, sh_cfg.joint_ids], qv[:, sh_cfg.joint_ids]
+    d_hip, v_hip = q[:, hip_cfg.joint_ids] - q0[:, hip_cfg.joint_ids], qv[:, hip_cfg.joint_ids]
+
+    rb = getattr(env, "reset_buf", None)
+    rid = rb.nonzero(as_tuple=False).flatten() if rb is not None else None
+
+    def _ema(name, x, alpha, zero=False):
+        prev = getattr(env, name, None)
+        if prev is None or prev.shape != x.shape or prev.device != x.device:
+            prev = torch.zeros_like(x) if zero else x.clone()
+        elif rid is not None and rid.numel():
+            prev = prev.clone()
+            prev[rid] = 0.0 if zero else x[rid]
+        out = (1.0 - alpha) * prev + alpha * x
+        setattr(env, name, out)
+        return out
+
+    sig = d_hip + lead_time * _ema("_arm_hip_vel", v_hip, 0.2, zero=True)
+    if center_alpha > 0.0:
+        sig = sig - _ema("_arm_hip_mean", sig, center_alpha, zero=True)
+
+    lo = -max_swing if max_swing_fwd is None else -abs(max_swing_fwd)
+    hi = max_swing if max_swing_back is None else abs(max_swing_back)
+    amp = max(0.5 * (abs(lo) + abs(hi)), 1e-6)
+    tgt = amp * torch.tanh((-swing_gain * sig + swing_bias) / amp)
+
+    speed = torch.linalg.vector_norm(env.command_manager.get_command(command_name)[:, :3], dim=1)
+    x = ((speed - command_threshold) / max(gate_width, 1e-6)).clamp(0.0, 1.0)
+    tgt = tgt * (x * x * (3.0 - 2.0 * x)).unsqueeze(-1)
+
+    tgt = _ema("_arm_swing_tgt", tgt, smooth_alpha)
+
+    loss = _huber(d_sh - tgt, huber).sum(-1) + arm_vel_gain * v_sh.square().sum(-1)
+    if elbow_cfg is not None:
+        e_tgt = _ema("_arm_elbow_tgt", tgt, elbow_lag) if elbow_lag > 0.0 else tgt
+        d_el, v_el = q[:, elbow_cfg.joint_ids] - q0[:, elbow_cfg.joint_ids], qv[:, elbow_cfg.joint_ids]
+        loss = loss + _huber(d_el - elbow_sign * elbow_ratio * e_tgt, huber).sum(-1) \
+                    + elbow_vel_gain * v_el.square().sum(-1)
+    return loss
+
+def arm_clear_body(
+    env, asset_cfg,                             # joint_ids: L roll, R roll, L yaw, R yaw, L elbow, R elbow
+    roll_offset: float = 0.05, roll_gain: float = 10.0,
+    elbow_deadband: float = 0.0, elbow_vel_gain: float = 0.0,
+    command_name: str = "twist", command_threshold: float = 0.1,
+    yaw_gain: float = 0.15,
+) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    assert not isinstance(asset_cfg.joint_ids, slice) and len(asset_cfg.joint_ids) == 6, "需要 6 个关节"
+
+    dq = asset.data.joint_pos.torch[:, asset_cfg.joint_ids] - asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids]
+    dqd = asset.data.joint_vel.torch[:, asset_cfg.joint_ids]
+    off = torch.tensor([roll_offset, -roll_offset], device=dq.device, dtype=dq.dtype)
+    roll_yaw = roll_gain * (dq[:, :2] - off).abs().sum(-1) + yaw_gain * dq[:, 2:4].abs().sum(-1)
+    elbow = torch.relu(dq[:, 4:].abs() - elbow_deadband).sum(-1) if elbow_deadband > 0.0 else 0.0
+    damp = elbow_vel_gain * dqd[:, 4:].square().sum(-1)
+    active = (torch.linalg.vector_norm(env.command_manager.get_command(command_name)[:, :3], dim=1) > command_threshold).float()
+    return (roll_yaw + elbow + damp) * active
+
+def track_ang_vel_z_exp(
+    env, std: float, command_name: str = "twist",
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """偏航角速度指令的指数核跟踪奖励；指令接近 0 时用更小的 std 把"别乱转"拉紧。"""
+    asset = env.scene[asset_cfg.name]
+    command = env.command_manager.get_command(command_name)          # [N, 3] = (vx, vy, wz)
+    ang_vel_error = (command[:, 2] - asset.data.root_ang_vel_b.torch[:, 2]).square()
+
+    total_command = torch.linalg.vector_norm(command[:, :2], dim=1) + command[:, 2].abs()
+    adaptive_std = torch.where(
+        total_command < 0.3,
+        torch.full_like(total_command, 0.05),
+        torch.full_like(total_command, std),
+    )
+    return torch.exp(-ang_vel_error / adaptive_std**2)
+
+def feet_not_lifted_when_turning(
+    env, sensor_cfg: SceneEntityCfg, command_name: str = "twist",
+    command_threshold: float = 0.15, min_contact_time: float = 0.15,
+    velocity_ratio: float = 0.5,
+) -> torch.Tensor:
+    """被要求原地转向，但实际几乎没转、且双脚都长时间贴地 → 罚（既不转也不抬脚）。"""
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    ct = sensor.data.current_contact_time.torch[:, sensor_cfg.body_ids]     # [N, 2]
+
+    cmd = env.command_manager.get_command(command_name)
+    wz_cmd = cmd[:, 2].abs()
+    is_commanded = _turning_mask(env, command_name, command_threshold)      # 用转向桶判断
+
+    wz = env.scene["robot"].data.root_ang_vel_b.torch[:, 2].abs()
+    not_turning = wz < velocity_ratio * wz_cmd.clamp_min(command_threshold)
+
+    both_planted = (ct > min_contact_time).all(dim=-1)
+    return (is_commanded & not_turning & both_planted).float()
+
+def feet_air_time_turning(
+    env, sensor_cfg: SceneEntityCfg, command_name: str = "twist",
+    command_threshold: float = 0.15, min_air_time: float = 0.08, air_cap: float = 0.30,
+) -> torch.Tensor:
+    """原地转向时，每迈出一步（离地够久再落地）给奖励，按离地时长线性计分。"""
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    first_contact = sensor.compute_first_contact(env.step_dt).torch[:, sensor_cfg.body_ids].float()
+    air = sensor.data.last_air_time.torch[:, sensor_cfg.body_ids]
+    step = torch.clamp(air, max=air_cap) * (air > min_air_time).float() * first_contact
+    return step.sum(dim=-1) * _turning_mask(env, command_name, command_threshold).float()
+
+def body_flat_orientation_l2(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["torso_roll_link"]),
+    pitch_offset: float = 0.0,
+    roll_offset: float = 0.0,
+    tolerance: float = 0.0,
+    relative_to_root: bool = True,
+    command_name: str = "twist",
+    command_threshold: float = 0.1,
+    only_when_standing: bool = False,
+) -> torch.Tensor:
+
+    asset = env.scene[asset_cfg.name]
+    body_q = asset.data.body_quat_w.torch[:, asset_cfg.body_ids]          # [N,B,4] xyzw
+    n, b = body_q.shape[:2]
+    body_q = body_q.reshape(-1, 4)
+    if relative_to_root:
+        root_q = asset.data.root_quat_w.torch[:, None, :].expand(n, b, 4).reshape(-1, 4)
+        body_q = math_utils.quat_mul(math_utils.quat_conjugate(root_q), body_q)
+
+    g_w = torch.tensor([0.0, 0.0, -1.0], device=body_q.device, dtype=body_q.dtype)
+    g_b = quat_apply_inverse(body_q, g_w.expand(body_q.shape[0], 3)).reshape(n, b, 3)
+
+    pitch = torch.asin(g_b[..., 0].clamp(-1.0, 1.0))      # 前倾为正
+    roll = torch.asin(-g_b[..., 1].clamp(-1.0, 1.0))      # 右倾为正
+
+    loss = ((pitch - pitch_offset).abs() - tolerance).clamp(min=0.0).square()
+    loss += (roll - roll_offset).abs().sub(tolerance).clamp(min=0.0).square()
+    loss = loss.sum(dim=1)
+    if only_when_standing:
+        loss = loss * _standing_mask(env, command_name, command_threshold).float()
+    return loss
