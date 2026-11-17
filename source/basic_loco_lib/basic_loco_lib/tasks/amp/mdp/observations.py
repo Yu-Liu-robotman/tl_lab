@@ -7,7 +7,10 @@ from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
 from isaaclab.utils.math import (
     matrix_from_quat,
     quat_apply_inverse,
+    quat_conjugate,
+    quat_mul,
     subtract_frame_transforms,
+    yaw_quat,
 )
 
 if TYPE_CHECKING:
@@ -97,3 +100,21 @@ def robot_body_ang_vel_b(
     ).reshape(env.num_envs, num_bodies, 3)
 
     return body_ang_vel_b.reshape(env.num_envs, -1)
+
+
+def robot_root_local_rot_tan_norm(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names="base_link"),
+) -> torch.Tensor:
+    """Root orientation with the yaw component removed, as (tangent, normal) x 3.
+
+    Yaw-invariant, so it is comparable across clips and does not encode heading.
+    """
+    asset = env.scene[asset_cfg.name]
+    quat_w = asset.data.body_quat_w.torch[:, asset_cfg.body_ids[0]]      # (N, 4) xyzw
+
+    yaw_q = yaw_quat(quat_w)
+    quat_local = quat_mul(quat_conjugate(yaw_q), quat_w)
+
+    rotm = matrix_from_quat(quat_local)                                  # (N, 3, 3)
+    return torch.cat([rotm[..., 0], rotm[..., 2]], dim=-1)               # (N, 6)

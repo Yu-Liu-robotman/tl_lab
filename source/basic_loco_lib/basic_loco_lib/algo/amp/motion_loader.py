@@ -12,7 +12,10 @@ from tqdm import tqdm
 from isaaclab.utils.math import (
     matrix_from_quat,
     quat_apply_inverse,
+    quat_conjugate,
+    quat_mul,
     subtract_frame_transforms,
+    yaw_quat,
 )
 
 from .motion_labels import AMP_LABEL_DIM, AMP_LABEL_NAMES, label_from_name, label_index
@@ -63,6 +66,7 @@ class AMPLoader:
         self._body_ori_b_list = []
         self._body_lin_vel_b_list = []
         self._body_ang_vel_b_list = []
+        self._root_rot_tan_norm_list = []
 
         for motion_idx, (motion_name, motion_path) in enumerate(zip(motion_names, motion_files)):
             print(f"Processing motion {motion_idx+1}/{len(motion_files)}: {motion_name}")
@@ -88,6 +92,13 @@ class AMPLoader:
             _body_ori_b = torch.zeros((time_step_total, self._num_bodies, 6), dtype=torch.float32, device=device)
             _body_lin_vel_b = torch.zeros((time_step_total, self._num_bodies, 3), dtype=torch.float32, device=device)
             _body_ang_vel_b = torch.zeros((time_step_total, self._num_bodies, 3), dtype=torch.float32, device=device)
+            anchor_quat_w = _body_quat_w[:, anchor_index, :]                       # (T, 4) xyzw
+            anchor_yaw_quat = yaw_quat(anchor_quat_w)
+            anchor_quat_local = quat_mul(quat_conjugate(anchor_yaw_quat), anchor_quat_w)
+            anchor_rotm_local = matrix_from_quat(anchor_quat_local)                # (T, 3, 3)
+            _root_rot_tan_norm = torch.cat(
+                [anchor_rotm_local[:, :, 0], anchor_rotm_local[:, :, 2]], dim=-1
+            )
 
             for frame_idx in tqdm(range(time_step_total), desc=f"Preloading AMP data for {motion_name}"):
                 tgt_anchor_pos_w = _body_pos_w[frame_idx, anchor_index, :].squeeze().unsqueeze(0).repeat(self._num_bodies, 1)
@@ -130,6 +141,7 @@ class AMPLoader:
             self._body_ori_b_list.append(_body_ori_b)
             self._body_lin_vel_b_list.append(_body_lin_vel_b)
             self._body_ang_vel_b_list.append(_body_ang_vel_b)
+            self._root_rot_tan_norm_list.append(_root_rot_tan_norm)
 
         self.time_step_total = self._body_pos_b_list[0].shape[0]
         self.motion_total_time = self.time_step_total / self.fps
@@ -152,6 +164,7 @@ class AMPLoader:
                     self._body_ori_b_list,
                     self._body_lin_vel_b_list,
                     self._body_ang_vel_b_list,
+                    self._root_rot_tan_norm_list,
                 )
             ]
         )
@@ -160,8 +173,8 @@ class AMPLoader:
 
     @property
     def observation_dim(self) -> int:
-        obs_dim = (3 + 6 + 3 + 3) * self._num_bodies
-        return obs_dim
+        # per-body pos(3) + ori(6) + lin_vel(3) + ang_vel(3), plus the yaw-invariant root orientation.
+        return (3 + 6 + 3 + 3) * self._num_bodies + 6
 
     def _setup_labels(self, labels: Sequence[str], weights: Sequence[float]) -> None:
         names = [str(label) if label else label_from_name(name) for label, name in zip(labels, self.motion_names)]

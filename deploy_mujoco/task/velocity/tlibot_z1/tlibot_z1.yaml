@@ -15,6 +15,12 @@ realtime: true             # pace the loop against the wall clock (false = as fa
 print_vel_interval_steps: 100   # dump root body linear velocity every N physics steps (100 = 0.5 s)
 root_body_name: base_link     # floating base; the camera tracks it
 initial_pos: [0.0, 0.0, 0.865]
+# -- orientation diagnostics -------------------------------------------------- #
+# Printed every `print_vel_interval_steps`: body->world, body->root, and world minus the
+# mounting-angle offset (the quantity `body_flat_orientation_l2(relative_to_root=False)` sees).
+orientation_bodies: [torso_roll_link]
+orientation_pitch_offsets:
+  torso_roll_link: 8.0        # +8.00 deg URDF mounting angle, same as the reward's pitch_offset
 viewer:
   distance: 3.0
   azimuth: 90

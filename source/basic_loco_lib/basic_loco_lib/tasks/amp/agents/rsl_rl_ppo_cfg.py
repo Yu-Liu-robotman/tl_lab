@@ -64,7 +64,7 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
     amp_reward_coef: float = 0.2
     amp_motion_files: str = ""
     amp_num_preload_transitions: int = 200000
-    amp_task_reward_lerp: float = 0.65
+    amp_task_reward_lerp: float = 0.7
     amp_discr_hidden_dims: list = (1024, 512, 256)
     min_normalized_std: list = (0.05,) * 29
     amp_body_names: tuple = ()
@@ -133,12 +133,12 @@ Z1_AMP_MOTION_SPEC_BY_FILE: dict[str, tuple[str, float]] = {
                 "z1_forward_walk_smplx_v05.npz": ("forward", 1.0),
                     "z1_forward_walk_smplx_v063.npz": ("forward", 1.0),
                         "z1_forward_walk_smplx.npz": ("forward", 1.0),
-    "z1_23dof_forward_new_0481_backward.npz": ("backward", 1.0),
-        "z1_23dof_forward_new_0539_backward.npz": ("backward", 1.0),
-    "left_segment_0000-0051.npz": ("turn_left", 1.0),
-        "right_segment_0000-0051.npz": ("turn_right", 1.0),
-    "z1_23dof_side_left_segment_2475-2747.npz": ("side_left", 1.0),
-        "z1_23dof_side_right_segment_1727-1999.npz": ("side_right", 1.0),
+    "z1_23dof_forward_new_0481_backward.npz": ("backward", 0.0),
+        "z1_23dof_forward_new_0539_backward.npz": ("backward", 0.0),
+    "left_segment_0000-0051.npz": ("turn_left", 0.0),
+        "right_segment_0000-0051.npz": ("turn_right", 0.0),
+    "z1_23dof_side_left_segment_2475-2747.npz": ("side_left", 0.0),
+        "z1_23dof_side_right_segment_1727-1999.npz": ("side_right", 0.0),
     "z1_23dof_stand.npz": ("stand", 1.0),
 }
 _z1_file_names = tuple(Path(path).name for path in Z1_AMP_MOTION_FILES)
@@ -153,7 +153,7 @@ def z1_amp_ppo_runner_cfg() -> RslRlAmpRunnerCfg:
     cfg = RslRlAmpRunnerCfg(
         amp_motion_files=str(Z1_AMP_MOTION_DIR),
         amp_body_names=Z1_AMP_BODY_NAMES,
-        amp_anchor_name="base_link",
+        amp_anchor_name="torso_roll_link",
         amp_motion_labels=Z1_AMP_MOTION_LABELS,
         amp_motion_weights=Z1_AMP_MOTION_WEIGHTS,
         amp_motion_velocity_threshold=1.0,

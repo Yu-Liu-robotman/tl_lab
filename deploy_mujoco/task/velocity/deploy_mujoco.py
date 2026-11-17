@@ -101,8 +101,8 @@ def print_body_lin_vel(m, d, body_name, command):
 def body_pitch_roll_deg(m, d, body_name, ref_body_name=None):
     """Pitch / roll [deg] of a body, optionally measured relative to ``ref_body_name``.
 
-    Same convention as the training rewards (``pitch = asin(g_b.x)``):
-    ``pitch < 0`` = leaning back, ``pitch > 0`` = leaning forward.
+    Same convention as the training rewards (``pitch = asin(g_b.x)``,
+    ``roll = asin(-g_b.y)``): ``pitch > 0`` = leaning forward, ``roll > 0`` = leaning right.
     """
     bid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, body_name)
     if bid < 0:
@@ -116,23 +116,34 @@ def body_pitch_roll_deg(m, d, body_name, ref_body_name=None):
     g_b = rot.T @ np.array([0.0, 0.0, -1.0])
     return (
         float(np.degrees(np.arcsin(np.clip(g_b[0], -1.0, 1.0)))),
-        float(np.degrees(np.arcsin(np.clip(g_b[1], -1.0, 1.0)))),
+        float(np.degrees(np.arcsin(np.clip(-g_b[1], -1.0, 1.0)))),
     )
 
 
-def print_body_orientation(m, d, root_body_name, extra_bodies=()):
-    """Print base verticality (world) and per-body verticality relative to the root.
+def print_body_orientation(m, d, root_body_name, extra_bodies=(), pitch_offsets=None):
+    """Print base verticality and, per extra body, the three reference frames.
 
-    The ``(rel)`` numbers use the same frame as ``body_orientation_l1(relative_to_root=True)``,
-    so at the default stance they should read ~0 deg.
+    * ``world``      -- body -> world; what ``body_flat_orientation_l2(relative_to_root=False)``
+      measures before subtracting ``pitch_offset``.
+    * ``rel``        -- body -> root; what ``relative_to_root=True`` measures (0 at the
+      nominal stance).
+    * ``world-offset`` -- ``world - pitch_offset``; the signed error the reward squares, so it
+      should hover around the root's own pitch when the body is held at its nominal angle.
     """
+    pitch_offsets = pitch_offsets or {}
     pitch, roll = body_pitch_roll_deg(m, d, root_body_name)
-    parts = [f"base({root_body_name}) pitch={pitch:+6.2f}deg roll={roll:+6.2f}deg"]
+    parts = [f"base({root_body_name}) world pitch={pitch:+6.2f} roll={roll:+6.2f}"]
     for name in extra_bodies:
         if mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, name) < 0:
             continue
-        p, r = body_pitch_roll_deg(m, d, name, ref_body_name=root_body_name)
-        parts.append(f"{name}(rel) pitch={p:+6.2f}deg roll={r:+6.2f}deg")
+        pitch_w, roll_w = body_pitch_roll_deg(m, d, name)
+        pitch_r, roll_r = body_pitch_roll_deg(m, d, name, ref_body_name=root_body_name)
+        offset = float(pitch_offsets.get(name, 0.0))
+        parts.append(
+            f"{name} world pitch={pitch_w:+6.2f} roll={roll_w:+6.2f} | "
+            f"rel({root_body_name}) pitch={pitch_r:+6.2f} roll={roll_r:+6.2f} | "
+            f"world-offset pitch={pitch_w - offset:+6.2f}"
+        )
     print(f"[ori] t={d.time:6.2f}s  " + "  ".join(parts))
 
 
@@ -351,6 +362,11 @@ def main():
     # Bodies whose verticality is printed next to the base (measured relative to the root).
     # Override in <robot>.yaml with e.g. ``orientation_bodies: [torso_roll_link]``.
     orientation_bodies = [str(n) for n in config.get("orientation_bodies", ["torso_roll_link", "torso_pitch_link"])]
+    # Per-body mounting-angle offsets, matching the training reward's ``pitch_offset``. The
+    # printout shows ``world - offset`` next to the raw world angle so both can be checked.
+    orientation_pitch_offsets = {
+        str(k): float(v) for k, v in (config.get("orientation_pitch_offsets") or {}).items()
+    }
     num_joints = len(mj_joint_names)
     backend = config["backend"]
     print(f"Policy backend (joint order): {backend}")
@@ -457,9 +473,11 @@ def main():
                 target_dof_pos[action_mj_indices] = (
                     action * action_scale[action_mj_indices] + default_dof[action_mj_indices]
                 )
-                # if timestep % print_every_steps == 0:
-                #     print_body_lin_vel(m, d, root_body_name, command)
-                #     print_body_orientation(m, d, root_body_name, orientation_bodies)
+                if timestep % print_every_steps == 0:
+                    print_body_orientation(
+                        m, d, root_body_name, orientation_bodies, orientation_pitch_offsets
+                    )
+                # print_body_lin_vel(m, d, root_body_name, command)
 
             # PD control at physics rate.
             tau = pd_control(

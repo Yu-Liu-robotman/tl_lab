@@ -63,7 +63,7 @@ class CommandsCfg:
     twist = amp_commands.AmpVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
-        rel_standing_envs=1.0, # 站立占比
+        rel_standing_envs=0.2, # 站立占比
         rel_turning_envs=0.0,   # 原地转向占比
         rel_lateral_envs=0.0,   # 横移占比
         rel_heading_envs=0.0,   # 朝向占比
@@ -71,7 +71,7 @@ class CommandsCfg:
         debug_vis=False,
         ranges=amp_commands.AmpVelocityCommandCfg.Ranges(
             # forward only, and kept away from 0 so it is never a "fake stand" bucket
-            lin_vel_x=(-0.0, 0),
+            lin_vel_x=(0.3, 1.0),
             lin_vel_y=(-0.0, 0.0),
             ang_vel_z=(-0.0, 0.0),
             # heading=(-math.pi / 2, math.pi / 2),
@@ -100,8 +100,8 @@ _AMP_BODY_NAMES = (
     "arm_right_elbow_link",
     "arm_right_wrist_yaw_link",
 )
-_ANCHOR_NAME = "base_link"
-_AMP_ANCHOR_NAME = "base_link"
+_ANCHOR_NAME = "torso_roll_link"
+_AMP_ANCHOR_NAME = "torso_roll_link"
 
 def _amp_body_cfgs() -> dict:
     """Fresh SceneEntityCfg per term -- the manager resolves them in place."""
@@ -160,6 +160,7 @@ class ObservationsCfg:
         body_ori_b = ObsTerm(func=amp_obs.robot_body_ori_b, params=_amp_body_cfgs())
         body_lin_vel_b = ObsTerm(func=amp_obs.robot_body_lin_vel_b, params=_amp_body_cfgs())
         body_ang_vel_b = ObsTerm(func=amp_obs.robot_body_ang_vel_b, params=_amp_body_cfgs())
+        root_rot_tan_norm = ObsTerm(func=amp_obs.robot_root_local_rot_tan_norm,params={"asset_cfg": SceneEntityCfg("robot", body_names=_AMP_ANCHOR_NAME)})
 
         def __post_init__(self):
             self.concatenate_terms = True
@@ -178,7 +179,7 @@ class ObservationsCfg:
 class RewardsCfg:
     track_anchor_lin_vel = RewTerm(
         func=amp_rewards.track_anchor_linear_velocity,
-        weight=1.0,
+        weight=1.5,
         params={
             "command_name": "twist",
             "std": 1.0,
@@ -189,7 +190,7 @@ class RewardsCfg:
     )
     track_anchor_ang_vel = RewTerm(
         func=amp_rewards.track_anchor_angular_velocity,
-        weight=1.0,
+        weight=1.5,
         params={
             "command_name": "twist",
             "std": 1.0,
@@ -226,10 +227,10 @@ class RewardsCfg:
     base_body_orientation_l2 = RewTerm(
         func=amp_rewards.body_flat_orientation_l2, weight=-10.0,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
-                "pitch_offset": 8.5 * math.pi / 180,      # +8.00°，扣掉 URDF 安装角
-                "roll_offset": 0.0, "tolerance": 0.02,
-                "relative_to_root": False,     # ★ 关键：相对骨盆测
-                "only_when_standing": True}, # ★ 结构姿态行走时也成立，不用门控
+                "pitch_offset": 8 * math.pi / 180,      # +8.00°，扣掉 URDF 安装角
+                "roll_offset": 0.0, "tolerance": 0.5 * math.pi / 180,
+                "relative_to_root": False,     
+                "only_when_standing": False}, 
     )
     base_stand_to_commanded = RewTerm(
         func=amp_rewards.feet_not_lifted_when_commanded, weight=-2.0,
@@ -315,7 +316,7 @@ class RobotEnvCfg(BaseRobotEnvCfg):
                 params={
                     "event_name": "push_robot",
                     "nominal_range": {"x": 0.90, "y": 0.70, "roll": 0.40, "pitch": 0.50, "yaw": 0.50},
-                    "start_scale": 0.25,
+                    "start_scale": 1.0,
                     "end_scale": 1.0,
                     "ramp_steps": 24 * 12000,
                 },
