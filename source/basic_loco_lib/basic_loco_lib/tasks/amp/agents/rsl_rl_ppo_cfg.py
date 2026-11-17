@@ -61,10 +61,10 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
     obs_groups = {"actor": ["actor"], "critic": ["critic"]}
 
     # AMP-specific parameters
-    amp_reward_coef: float = 0.02 * 10
+    amp_reward_coef: float = 0.2
     amp_motion_files: str = ""
     amp_num_preload_transitions: int = 200000
-    amp_task_reward_lerp: float = 0.70
+    amp_task_reward_lerp: float = 0.65
     amp_discr_hidden_dims: list = (1024, 512, 256)
     min_normalized_std: list = (0.05,) * 29
     amp_body_names: tuple = ()
@@ -128,12 +128,13 @@ Z1_AMP_BODY_NAMES: tuple = (
 Z1_AMP_MOTION_DIR = PROJECT_DIR / "data" / "z1_amp" / "output" / "npz"
 Z1_AMP_MOTION_FILES: tuple = tuple(sorted(str(path) for path in Path(Z1_AMP_MOTION_DIR).glob("*.npz")))
 Z1_AMP_MOTION_SPEC_BY_FILE: dict[str, tuple[str, float]] = {
-    "z1_forward_walk_smplx_v05.npz": ("forward", 1.0),
-        "z1_forward_walk_smplx_v063.npz": ("forward", 1.0),
-            "z1_forward_walk_smplx.npz": ("forward", 1.0),
-    "z1_forward_walk_smplx_v05_back.npz": ("backward", 1.0),
-        "z1_forward_walk_smplx_v063_back.npz": ("backward", 1.0),
-            "z1_forward_walk_smplx_back.npz": ("backward", 1.0),
+    "z1_forward_walk_smplx_v03.npz": ("forward", 1.0),
+        "z1_forward_walk_smplx_v04.npz": ("forward", 1.0),  
+                "z1_forward_walk_smplx_v05.npz": ("forward", 1.0),
+                    "z1_forward_walk_smplx_v063.npz": ("forward", 1.0),
+                        "z1_forward_walk_smplx.npz": ("forward", 1.0),
+    "z1_23dof_forward_new_0481_backward.npz": ("backward", 1.0),
+        "z1_23dof_forward_new_0539_backward.npz": ("backward", 1.0),
     "left_segment_0000-0051.npz": ("turn_left", 1.0),
         "right_segment_0000-0051.npz": ("turn_right", 1.0),
     "z1_23dof_side_left_segment_2475-2747.npz": ("side_left", 1.0),
@@ -152,7 +153,7 @@ def z1_amp_ppo_runner_cfg() -> RslRlAmpRunnerCfg:
     cfg = RslRlAmpRunnerCfg(
         amp_motion_files=str(Z1_AMP_MOTION_DIR),
         amp_body_names=Z1_AMP_BODY_NAMES,
-        amp_anchor_name="torso_yaw_link",
+        amp_anchor_name="base_link",
         amp_motion_labels=Z1_AMP_MOTION_LABELS,
         amp_motion_weights=Z1_AMP_MOTION_WEIGHTS,
         amp_motion_velocity_threshold=1.0,

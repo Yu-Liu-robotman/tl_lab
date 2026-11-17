@@ -64,14 +64,14 @@ TLIBOT_Z1_ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
     curriculum=True,
     sub_terrains={
         "flat": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.50,
+            proportion=0.30,
             noise_range=(0.0, 0.0),
             noise_step=0.005,
             downsampled_scale=0.2,
             border_width=0.25,
         ),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.5,
+            proportion=0.7,
             noise_range=(-0.02, 0.03),
             noise_step=0.005,
             downsampled_scale=0.2,

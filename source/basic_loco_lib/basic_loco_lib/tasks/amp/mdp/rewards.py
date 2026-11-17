@@ -370,6 +370,7 @@ def feet_air_time_turning(
     step = torch.clamp(air, max=air_cap) * (air > min_air_time).float() * first_contact
     return step.sum(dim=-1) * _turning_mask(env, command_name, command_threshold).float()
 
+
 def body_flat_orientation_l2(
     env,
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot", body_names=["torso_roll_link"]),

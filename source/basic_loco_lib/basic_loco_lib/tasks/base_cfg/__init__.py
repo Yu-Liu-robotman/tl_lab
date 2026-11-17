@@ -9,6 +9,7 @@ from .base_cfg import (
     EventCfg,
     ObservationsCfg,
     PhysicsCfg,
+    PushCurriculumCfg,
     RobotEnvCfg,
     RobotSceneCfg,
     TerminationsCfg,

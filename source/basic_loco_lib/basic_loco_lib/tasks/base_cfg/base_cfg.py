@@ -30,6 +30,8 @@ from isaaclab_tasks.utils import PresetCfg
 
 from basic_loco_lib.tasks.velocity import mdp as velocity_mdp
 
+from . import mdp as base_mdp
+
 BASE_BODY_NAME = "base_link"
 FOOT_BODY_REGEX = ".*ankle_roll.*"
 
@@ -227,7 +229,7 @@ class ActionsCfg:
     """Joint-position action boilerplate; subclasses override ``scale``."""
 
     JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=1.0, use_default_offset=True
+        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=True
     )
 
 
@@ -277,6 +279,20 @@ class TerminationsCfg:
 class CurriculumCfg:
     terrain_levels = CurrTerm(func=velocity_mdp.terrain_levels_vel)
     lin_vel_cmd_levels = CurrTerm(velocity_mdp.lin_vel_cmd_levels)
+
+
+@configclass
+class PushCurriculumCfg:
+    push_velocity = CurrTerm(
+        func=base_mdp.push_velocity_levels,
+        params={
+            "event_name": "push_robot",
+            "nominal_range": {"x": 0.90, "y": 0.70, "roll": 0.40, "pitch": 0.50, "yaw": 0.50},
+            "start_scale": 0.25,
+            "end_scale": 1.0,
+            "ramp_steps": 24 * 8000,
+        },
+    )
 
 
 @configclass

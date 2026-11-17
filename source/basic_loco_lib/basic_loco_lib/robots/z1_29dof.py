@@ -97,7 +97,7 @@ Z129DOF = TlibotArticulationCfg(
         },
         joint_vel={".*": 0.0},
     ),
-    soft_joint_pos_limit_factor=0.90,
+    soft_joint_pos_limit_factor=0.98,
     actuators={
         "RH85": ImplicitActuatorCfg(
             joint_names_expr=[

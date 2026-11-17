@@ -11,6 +11,8 @@ Usage
 """
 
 import argparse
+import contextlib
+import os
 import sys
 import time
 from collections import deque
@@ -26,6 +28,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from tools.velocity_command_panel import VelocityCommandPanel
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+class _StaticCommandPanel:
+    """Stand-in for ``VelocityCommandPanel`` when no X display is available."""
+
+    def __init__(self, command: np.ndarray):
+        self._command = command
+        self.running = True
+
+    def read(self) -> np.ndarray:
+        return self._command
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 def quat_to_mat(q_wxyz):
@@ -159,6 +178,16 @@ def main():
         type=float,
         default=None,
         help="stop after this many seconds of simulated time (default: run until the window is closed).",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="run without the MuJoCo viewer and the Tk command panel (no display needed).",
+    )
+    parser.add_argument(
+        "--command",
+        default="0,0,0",
+        help="headless fixed command 'vx,vy,wz' (default: 0,0,0).",
     )
     args = parser.parse_args()
 
@@ -310,6 +339,13 @@ def main():
     duration = args.duration
     command = np.zeros(3, dtype=np.float32)
 
+    # The Tk panel and the passive viewer both need an X display. On headless machines, or
+    # when the X server's client table is full ("Maximum number of clients reached"), fall
+    # back to a static command and no viewer.
+    headless = args.headless or os.environ.get("MUJOCO_HEADLESS", "0") == "1"
+    if headless:
+        command[:] = np.array([float(v) for v in args.command.split(",")], dtype=np.float32)
+
     mj_joint_names = [str(n) for n in config["mj_joint_names"]]
     root_body_name = str(config["root_body_name"])
     # Bodies whose verticality is printed next to the base (measured relative to the root).
@@ -350,7 +386,9 @@ def main():
     d = mujoco.MjData(m)
 
     print(f"Loading ONNX policy: {policy_path}")
-    ort_session = onnxruntime.InferenceSession(str(policy_path))
+    # Pin CPU: the CUDA probe only prints a noisy '/sys/class/drm' warning, and inference for
+    # a 3-layer MLP is far below one control period anyway.
+    ort_session = onnxruntime.InferenceSession(str(policy_path), providers=["CPUExecutionProvider"])
 
     # Spawn at the velocity task's default pose, without reset noise.
     d.qpos[0:3] = config["initial_pos"]
@@ -362,7 +400,11 @@ def main():
     action = np.zeros(action_dim, dtype=np.float32)
     obs_buffer = deque(maxlen=obs_history_length)
     print(f"policy obs: {obs_dim} dims (history_length={obs_history_length}); command={command.tolist()}")
-    if render_every > 1:
+    if headless:
+        print(f"headless: no viewer / no Tk panel; fixed command={command.tolist()}")
+        if duration is None:
+            print("[INFO] headless without --duration: press Ctrl+C to stop")
+    elif render_every > 1:
         print(f"viewer: {render_fps:.0f} Hz (sync every {render_every} physics steps), realtime={realtime}")
     # How often (in physics steps) to dump the base linear velocity.
     print_every_steps = max(1, int(config.get("print_vel_interval_steps", decimation * 25)))
@@ -370,11 +412,18 @@ def main():
     sim_elapsed = 0.0
     slow_warned = False
 
-    with VelocityCommandPanel(command, config["command_ranges"]) as command_panel, \
-            mujoco.viewer.launch_passive(m, d) as viewer:
+    stack = contextlib.ExitStack()
+    if headless:
+        command_panel = stack.enter_context(_StaticCommandPanel(command))
+        viewer = None
+    else:
+        command_panel = stack.enter_context(VelocityCommandPanel(command, config["command_ranges"]))
+        viewer = stack.enter_context(mujoco.viewer.launch_passive(m, d))
         viewer_setup(viewer, m, config["viewer"], root_body_name)
+
+    with stack:
         start = time.time()
-        while viewer.is_running() and command_panel.running:
+        while (viewer is None or viewer.is_running()) and command_panel.running:
             if timestep % decimation == 0:
                 command[:] = command_panel.read()
                 if not command_panel.running:
@@ -408,9 +457,9 @@ def main():
                 target_dof_pos[action_mj_indices] = (
                     action * action_scale[action_mj_indices] + default_dof[action_mj_indices]
                 )
-                if timestep % print_every_steps == 0:
-                    print_body_lin_vel(m, d, root_body_name, command)
-                    print_body_orientation(m, d, root_body_name, orientation_bodies)
+                # if timestep % print_every_steps == 0:
+                #     print_body_lin_vel(m, d, root_body_name, command)
+                #     print_body_orientation(m, d, root_body_name, orientation_bodies)
 
             # PD control at physics rate.
             tau = pd_control(
@@ -423,7 +472,7 @@ def main():
             sim_elapsed += sim_dt
 
             # Refresh the viewer at ``render_fps`` (not at the physics rate).
-            if timestep % render_every == 0:
+            if viewer is not None and timestep % render_every == 0:
                 viewer.sync()
 
             # Pace against the wall clock. The previous per-step sleep used
@@ -453,4 +502,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[INFO] interrupted by user")
