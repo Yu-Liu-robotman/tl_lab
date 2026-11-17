@@ -133,12 +133,12 @@ Z1_AMP_MOTION_SPEC_BY_FILE: dict[str, tuple[str, float]] = {
                 "z1_forward_walk_smplx_v05.npz": ("forward", 1.0),
                     "z1_forward_walk_smplx_v063.npz": ("forward", 1.0),
                         "z1_forward_walk_smplx.npz": ("forward", 1.0),
-    "z1_23dof_forward_new_0481_backward.npz": ("backward", 0.0),
-        "z1_23dof_forward_new_0539_backward.npz": ("backward", 0.0),
-    "left_segment_0000-0051.npz": ("turn_left", 0.0),
-        "right_segment_0000-0051.npz": ("turn_right", 0.0),
-    "z1_23dof_side_left_segment_2475-2747.npz": ("side_left", 0.0),
-        "z1_23dof_side_right_segment_1727-1999.npz": ("side_right", 0.0),
+    "z1_23dof_forward_new_0481_backward.npz": ("backward", 1.0),
+        "z1_23dof_forward_new_0539_backward.npz": ("backward", 1.0),
+    "left_segment_0000-0051.npz": ("turn_left", 1.0),
+        "right_segment_0000-0051.npz": ("turn_right", 1.0),
+    "z1_23dof_side_left_segment_2475-2747.npz": ("side_left", 1.0),
+        "z1_23dof_side_right_segment_1727-1999.npz": ("side_right", 1.0),
     "z1_23dof_stand.npz": ("stand", 1.0),
 }
 _z1_file_names = tuple(Path(path).name for path in Z1_AMP_MOTION_FILES)

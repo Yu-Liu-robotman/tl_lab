@@ -64,20 +64,20 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
         rel_standing_envs=0.2, # 站立占比
-        rel_turning_envs=0.0,   # 原地转向占比
-        rel_lateral_envs=0.0,   # 横移占比
+        rel_turning_envs=0.2,   # 原地转向占比
+        rel_lateral_envs=0.2,   # 横移占比
         rel_heading_envs=0.0,   # 朝向占比
         heading_command=False,
         debug_vis=False,
         ranges=amp_commands.AmpVelocityCommandCfg.Ranges(
             # forward only, and kept away from 0 so it is never a "fake stand" bucket
-            lin_vel_x=(0.3, 1.0),
-            lin_vel_y=(-0.0, 0.0),
-            ang_vel_z=(-0.0, 0.0),
+            lin_vel_x=(-1.0, 1.0),
+            lin_vel_y=(-1.0, 1.0),
+            ang_vel_z=(-1.0, 1.0),
             # heading=(-math.pi / 2, math.pi / 2),
             heading=(-0, 0),
-            pure_turn_ang_vel=(-0.7, 0.7),    # 纯转向桶
-            pure_lateral_lin_vel=(-0.6, 0.6), # 纯横移桶
+            pure_turn_ang_vel=(-1.0, 1.0),    # 纯转向桶
+            pure_lateral_lin_vel=(-1.0, 1.0), # 纯横移桶
         ), 
     )
 
@@ -222,7 +222,7 @@ class RewardsCfg:
     base_dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
     base_energy = RewTerm(func=mdp.energy, weight=-2e-5)
     base_is_terminated = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    base_flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
+    base_flat_orientation_l2 = RewTerm(func=amp_rewards.adaptive_flat_orientation_l2, weight=-2.0)
     # body_link -> base_link 8°  |  base_link -> world_link   |  body_link -> world_link 8° 
     base_body_orientation_l2 = RewTerm(
         func=amp_rewards.body_flat_orientation_l2, weight=-10.0,
@@ -230,7 +230,7 @@ class RewardsCfg:
                 "pitch_offset": 8 * math.pi / 180,      # +8.00°，扣掉 URDF 安装角
                 "roll_offset": 0.0, "tolerance": 0.5 * math.pi / 180,
                 "relative_to_root": False,     
-                "only_when_standing": False}, 
+                "only_when_standing": True}, 
     )
     base_stand_to_commanded = RewTerm(
         func=amp_rewards.feet_not_lifted_when_commanded, weight=-2.0,
@@ -241,7 +241,7 @@ class RewardsCfg:
         func=amp_rewards.joint_deviation_l1_when_standing, weight=-1.0,
         params={"command_threshold": 0.1, "stand_cmd": True, "vel_threshold": 0.15,
                 "angvel_threshold": 0.4, "require_contact": True, "min_contact_time": 0.15,
-                "tolerance": 0.10,"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint", ".*_hip_yaw_joint"])})
+                "tolerance": 1 * math.pi / 180,"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_.*"])})
     base_stand_foot_step_home = RewTerm(
         func=amp_rewards.foot_step_home_exp, weight=1.0,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
@@ -316,7 +316,7 @@ class RobotEnvCfg(BaseRobotEnvCfg):
                 params={
                     "event_name": "push_robot",
                     "nominal_range": {"x": 0.90, "y": 0.70, "roll": 0.40, "pitch": 0.50, "yaw": 0.50},
-                    "start_scale": 1.0,
+                    "start_scale": 0.4/0.9,
                     "end_scale": 1.0,
                     "ramp_steps": 24 * 12000,
                 },

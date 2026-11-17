@@ -209,11 +209,14 @@ def main():
     config_dir = config_path.parent
     with open(config_path) as f:
         config = yaml.safe_load(f)
+    # ``command_ranges`` written in this file is authoritative; only the exported params.yaml
+    # can supply it when the yaml leaves it out.
+    command_ranges_from_yaml = "command_ranges" in config
 
     _AUTO_KEYS = (
         "mj_joint_names", "joint_orders", "backend", "obs_history_length",
         "action_joint_names", "action_mj_indices", "obs_joint_names",
-        "obs_joint_mj_indices", "command_ranges", "ang_vel_scale",
+        "obs_joint_mj_indices", "ang_vel_scale",
         "joint_vel_scale", "stiffness", "damping", "default_joint_pos",
         "action_scale",
     )
@@ -320,6 +323,9 @@ def main():
     print(f"[INFO] policy: {policy_path}")
 
     # ---- merge auto-exported params ----------------------------------------
+    # ``command_ranges`` is handled separately: it only describes the training distribution and
+    # drives the panel sliders here, so the hand-written value in <robot>.yaml wins and the
+    # exported one is used only when the yaml omits it.
     params_path = Path(args.params).expanduser().resolve() if args.params else policy_path.parent / "params.yaml"
     if params_path.is_file():
         with open(params_path) as f:
@@ -327,9 +333,12 @@ def main():
         merged = [k for k in _AUTO_KEYS if k in auto_params]
         for key in merged:
             config[key] = auto_params[key]
+        if "command_ranges" in auto_params and "command_ranges" not in config:
+            config["command_ranges"] = auto_params["command_ranges"]
+            merged.append("command_ranges")
         print(f"[INFO] merged auto-exported params from {params_path}: {', '.join(merged)}")
     else:
-        missing = [key for key in _AUTO_KEYS if key not in config]
+        missing = [key for key in (*_AUTO_KEYS, "command_ranges") if key not in config]
         if missing:
             raise SystemExit(
                 f"[ERROR] {params_path} not found and {config_path.name} is missing {missing}.\n"
@@ -337,6 +346,13 @@ def main():
                 "        or pass --params /path/to/params.yaml"
             )
         print(f"[WARN] no params.yaml at {params_path}; using the hand-written blocks in {config_path.name}")
+
+    # Panel slider limits: the yaml's block, or the exported one as a fallback.
+    _raw_ranges = config.get("command_ranges") or {}
+    command_ranges = {
+        axis: (float(_raw_ranges.get(axis, default)[0]), float(_raw_ranges.get(axis, default)[1]))
+        for axis, default in (("vx", (-0.5, 2.0)), ("vy", (-0.3, 0.3)), ("wz", (-0.5, 0.5)))
+    }
 
     xml_path = config_dir / config["xml_path"]
     sim_dt = config["simulation_dt"]
@@ -433,7 +449,12 @@ def main():
         command_panel = stack.enter_context(_StaticCommandPanel(command))
         viewer = None
     else:
-        command_panel = stack.enter_context(VelocityCommandPanel(command, config["command_ranges"]))
+        command_panel = stack.enter_context(VelocityCommandPanel(command, command_ranges))
+        print(
+            "command panel ranges (from "
+            f"{'<robot>.yaml' if command_ranges_from_yaml else 'exported params.yaml'}): "
+            + "  ".join(f"{k}={command_ranges[k]}" for k in ("vx", "vy", "wz"))
+        )
         viewer = stack.enter_context(mujoco.viewer.launch_passive(m, d))
         viewer_setup(viewer, m, config["viewer"], root_body_name)
 
