@@ -79,6 +79,7 @@ REF/
 /data/*
 !/data/amp/
 !/data/amp/**
+!/data/z1_amp/
 !/data/z1_amp/**
 
 # Keep all packaged robot assets, including meshes and USD files.
