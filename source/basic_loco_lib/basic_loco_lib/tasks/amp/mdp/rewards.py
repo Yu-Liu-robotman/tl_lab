@@ -144,16 +144,38 @@ def _mask_by_delay(env, reward: torch.Tensor, delay_rew_ratio: float) -> torch.T
     return torch.where(_active_delay(env), reward * delay_rew_ratio, reward)
 
 # -- Joint deviation when standing
-def joint_deviation_l1_when_standing(
+def joint_deviation_l2_when_standing(
     env, asset_cfg=SceneEntityCfg("robot"), command_name: str = "twist",
-    command_threshold: float = 0.1, stand_cmd: bool = True,
-    vel_threshold: float = 0.25, angvel_threshold: float = 0.8,
-    tolerance: float = 0.0,
-    require_contact: bool = False,
-    sensor_cfg: SceneEntityCfg = SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-    min_contact_time: float = 0.15,
+    command_threshold: float = 0.1, stand_cmd: bool = True, deadband: float = 0.0,
+):
+    if stand_cmd:
+        active = _standing_mask(env, command_name, command_threshold).float()
+    else:
+        cmd = env.command_manager.get_command(command_name)
+        active = ((torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs()) < command_threshold).float()
+
+    asset = env.scene[asset_cfg.name]
+    e = (asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
+         - asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids]).abs() - deadband
+    return torch.clamp(e, min=0.0).square().sum(dim=-1) * active
+
+# -- Joint deviation when standing
+def joint_deviation_l1_when_standing_z(
+    env,
+    asset_cfg=SceneEntityCfg("robot"),
+    command_name: str = "twist",
+    command_threshold: float = 0.1,
+    stand_cmd: bool = True,
 ) -> torch.Tensor:
-    """Keep joints near default while standing, with a deadband so balance work is free."""
+    """Keep selected joints near their defaults while the robot is standing still.
+
+    ``stand_cmd=True`` uses the command label maintained by ``AmpVelocityCommand``
+    (falling back to a command-magnitude test); ``stand_cmd=False`` always uses the
+    magnitude test. ``vel_threshold`` / ``angvel_threshold`` additionally gate on the
+    root speed, so the term fades out while the robot is still braking.
+    """
+    from basic_loco_lib.tasks.velocity import mdp
+
     if stand_cmd:
         active = _standing_mask(env, command_name, command_threshold).float()
     else:
@@ -161,21 +183,16 @@ def joint_deviation_l1_when_standing(
         magnitude = torch.linalg.vector_norm(command[:, :2], dim=1) + command[:, 2].abs()
         active = (magnitude < command_threshold).float()
 
-    asset = env.scene[asset_cfg.name]
-    if vel_threshold > 0.0:
-        speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=-1)
-        active = active * (speed < vel_threshold).float()
-    if angvel_threshold > 0.0:
-        rate = torch.linalg.vector_norm(asset.data.root_ang_vel_b.torch, dim=-1)
-        active = active * (rate < angvel_threshold).float()
-    if require_contact:
-        sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-        ct = sensor.data.current_contact_time[:, sensor_cfg.body_ids]
-        active = active * (ct > min_contact_time).all(dim=-1).float()
+    # if vel_threshold > 0.0 or angvel_threshold > 0.0:
+    #     asset = env.scene[asset_cfg.name]
+    #     if vel_threshold > 0.0:
+    #         speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=-1)
+    #         active = active * (speed < vel_threshold).float()
+    #     if angvel_threshold > 0.0:
+    #         rate = torch.linalg.vector_norm(asset.data.root_ang_vel_b.torch, dim=-1)
+    #         active = active * (rate < angvel_threshold).float()
 
-    q = asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
-    q0 = asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids]
-    return (torch.abs(q - q0) - tolerance).clamp(min=0.0).sum(dim=-1) * active
+    return mdp.joint_deviation_l1(env, asset_cfg) * active
 
 # -- Base height above terrain with deadband
 def base_height_above_terrain_deadband(
@@ -403,3 +420,280 @@ def body_flat_orientation_l2(
     if only_when_standing:
         loss = loss * _standing_mask(env, command_name, command_threshold).float()
     return loss
+
+def standing_lin_vel_xy_l2(
+    env, command_name: str = "twist", command_threshold: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """站立时惩罚根节点水平速度：被推时越快"被带走"，扣得越多。"""
+    asset = env.scene[asset_cfg.name]
+    standing = _standing_mask(env, command_name, command_threshold).float()
+    return asset.data.root_lin_vel_b.torch[:, :2].square().sum(dim=-1) * standing
+
+
+def standing_root_yaw_rate_l2(
+    env, command_name: str = "twist", command_threshold: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """站立时惩罚偏航角速度：防止被推得原地转。"""
+    asset = env.scene[asset_cfg.name]
+    standing = _standing_mask(env, command_name, command_threshold).float()
+    return asset.data.root_ang_vel_b.torch[:, 2].square() * standing
+
+
+# --------------------------------------------------------------------------- #
+# Standing shaping -- ported from DroidUpE1_mjlab (src/tasks/amp/mdp/rewards.py)
+# mjlab -> IsaacLab API 映射：
+#   root_link_lin_vel_b -> root_lin_vel_b        body_link_pos_w  -> body_pos_w
+#   body_link_quat_w    -> body_quat_w           body_link_ang_vel_w -> body_ang_vel_w
+#   gravity_vec_w       -> data.GRAVITY_VEC_W    force_history    -> net_forces_w_history
+#   门限：全部用"命令幅值 < command_threshold"，不是 command_mode
+# --------------------------------------------------------------------------- #
+
+def _cmd_magnitude(env, command_name: str = "twist") -> torch.Tensor:
+    cmd = env.command_manager.get_command(command_name)
+    return torch.linalg.vector_norm(cmd[:, :2], dim=1) + cmd[:, 2].abs()
+
+def moving_mask(env, command_name: str = "twist", threshold: float = 0.1) -> torch.Tensor:
+    return _cmd_magnitude(env, command_name) > threshold
+
+def _gravity_dir_b(asset, body_ids) -> torch.Tensor:
+    """每帧 body 系单位重力方向, (N, K, 3)。"""
+    quat = asset.data.body_quat_w.torch[:, body_ids, :]
+    gravity_dir = torch.nn.functional.normalize(asset.data.GRAVITY_VEC_W.torch, dim=-1)
+    return quat_apply_inverse(quat, gravity_dir.unsqueeze(1).expand(-1, quat.shape[1], -1))
+
+def stand_torso_pitch_l2(
+    env, asset_cfg: SceneEntityCfg, command_name: str = "twist",
+    command_threshold: float = 0.1, pitch_offset: float = 0.0,
+) -> torch.Tensor:
+    """站立时躯干俯仰归零（pitch_offset 扣掉连杆安装角）。"""
+    asset = env.scene[asset_cfg.name]
+    g_b = _gravity_dir_b(asset, asset_cfg.body_ids)[:, 0, :]
+    pitch = torch.asin(g_b[:, 0].clamp(-1.0, 1.0))
+    still = (~moving_mask(env, command_name, command_threshold)).float()
+    return torch.square(pitch - pitch_offset) * still
+
+def zero_command_joint_l2(
+    env, asset_cfg: SceneEntityCfg, command_name: str = "twist", threshold: float = 0.05,
+) -> torch.Tensor:
+    """站立时指定关节回默认角（L2）。"""
+    asset = env.scene[asset_cfg.name]
+    error = (asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
+             - asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids])
+    return torch.sum(torch.square(error), dim=-1) * (_cmd_magnitude(env, command_name) < threshold).float()
+
+def stand_feet_heading_l2(
+    env, feet_cfg: SceneEntityCfg, command_name: str = "twist", threshold: float = 0.05,
+) -> torch.Tensor:
+    """站立时双脚朝向对齐骨盆。"""
+    asset = env.scene[feet_cfg.name]
+    feet_quat_w = asset.data.body_quat_w.torch[:, feet_cfg.body_ids, :]
+    fwd_b = torch.zeros((*feet_quat_w.shape[:-1], 3), device=feet_quat_w.device, dtype=feet_quat_w.dtype)
+    fwd_b[..., 0] = 1.0
+    fwd_w = math_utils.quat_apply(feet_quat_w, fwd_b)
+    pelvis_quat_w = asset.data.root_quat_w.torch[:, None, :].expand_as(feet_quat_w)
+    fwd_pelvis = quat_apply_inverse(pelvis_quat_w, fwd_w)
+    heading = torch.atan2(fwd_pelvis[..., 1], fwd_pelvis[..., 0])
+    return torch.sum(torch.square(heading), dim=-1) * (_cmd_magnitude(env, command_name) < threshold).float()
+
+def _stable_stand_weight(
+    env, sensor_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg,
+    command_name: str = "twist", command_threshold: float = 0.1,
+    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
+    contact_force_threshold: float = 5.0,
+) -> torch.Tensor:
+    """站立稳定度平滑权重：命令≈0 × 双脚接触 × 低速 × 躯干慢转。"""
+    asset = env.scene[torso_cfg.name]
+    planar_speed = torch.linalg.vector_norm(asset.data.root_lin_vel_b.torch[:, :2], dim=1)
+    quat = asset.data.body_quat_w.torch[:, torso_cfg.body_ids, :].squeeze(1)
+    ang_vel_w = asset.data.body_ang_vel_w.torch[:, torso_cfg.body_ids, :].squeeze(1)
+    torso_ang_speed = torch.linalg.vector_norm(quat_apply_inverse(quat, ang_vel_w)[:, :2], dim=1)
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    force = sensor.data.net_forces_w_history.torch[:, :, sensor_cfg.body_ids]
+    peak = torch.linalg.vector_norm(force, dim=-1).amax(dim=1)         # (N, n_feet)
+    double_support = (peak > contact_force_threshold).all(dim=-1)
+    weight = torch.exp(-torch.square(planar_speed / planar_speed_scale))
+    weight = weight * torch.exp(-torch.square(torso_ang_speed / torso_ang_vel_scale))
+    return (_cmd_magnitude(env, command_name) < command_threshold).float() * double_support.float() * weight
+
+def stable_stand_hip_roll_norm(
+    env, asset_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
+    command_name: str = "twist", command_threshold: float = 0.1,
+    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
+    contact_force_threshold: float = 5.0,
+) -> torch.Tensor:
+    """站立时 hip roll 回默认（这正是你说的"hip 没收回去"）。"""
+    asset = env.scene[asset_cfg.name]
+    error = (asset.data.joint_pos.torch[:, asset_cfg.joint_ids]
+             - asset.data.default_joint_pos.torch[:, asset_cfg.joint_ids])
+    weight = _stable_stand_weight(env, sensor_cfg, torso_cfg, command_name, command_threshold,
+                                  planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
+    return torch.linalg.vector_norm(error, dim=-1) * weight
+
+def stable_stand_feet_fore_aft_l1(
+    env, feet_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
+    position_deadband: float = 0.02, command_name: str = "twist", command_threshold: float = 0.1,
+    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
+    contact_force_threshold: float = 5.0,
+) -> torch.Tensor:
+    """站立时双脚前后位置归中（一脚在前一脚在后 -> 罚）。"""
+    asset = env.scene[feet_cfg.name]
+    feet = _feet_positions_b(asset, feet_cfg)
+    error = torch.sum(torch.relu(torch.abs(feet[:, :, 0]) - position_deadband), dim=-1)
+    weight = _stable_stand_weight(env, sensor_cfg, torso_cfg, command_name, command_threshold,
+                                  planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
+    return error * weight
+
+def stable_stand_feet_lateral_center_l1(
+    env, feet_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
+    center_deadband: float = 0.01, command_name: str = "twist", command_threshold: float = 0.1,
+    planar_speed_scale: float = 0.2, torso_ang_vel_scale: float = 0.5,
+    contact_force_threshold: float = 5.0,
+) -> torch.Tensor:
+    """站立时双脚横向中心归零（整体歪向一侧 -> 罚）。"""
+    asset = env.scene[feet_cfg.name]
+    feet = _feet_positions_b(asset, feet_cfg)
+    center = 0.5 * (feet[:, 0, 1] + feet[:, 1, 1])
+    error = torch.relu(torch.abs(center) - center_deadband)
+    weight = _stable_stand_weight(env, sensor_cfg, torso_cfg, command_name, command_threshold,
+                                  planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
+    return error * weight
+
+def _walk_style_mask(
+    env,
+    command_name: str = "twist",
+    minimum_command: float = 0.1,
+    maximum_forward_speed: float = 0.8,
+    include_turning: bool = True,
+) -> torch.Tensor:
+    """挑出"行走风格"的移动命令：mixed 且不快跑，可选含纯转向。"""
+    command = env.command_manager.get_command(command_name)
+    mode = _command_mode(env, command_name)
+    if mode is None:
+        raise RuntimeError("walk-style foot rewards require AmpVelocityCommand.command_mode")
+    walk = (mode == COMMAND_MODE_MIXED) & (command[:, 0] <= maximum_forward_speed)
+    if include_turning:
+        walk = walk | (mode == COMMAND_MODE_TURNING)
+    return walk & (_cmd_magnitude(env, command_name) > minimum_command)
+
+def walk_swing_foot_clearance(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    feet_cfg: SceneEntityCfg,
+    contact_height: float,
+    target_clearance: float,
+    minimum_air_time: float = 0.16,
+    maximum_air_time: float = 0.36,
+    minimum_support_time: float = 0.04,
+    command_name: str = "twist",
+    minimum_command: float = 0.1,
+    maximum_forward_speed: float = 0.8,
+    include_turning: bool = True,
+) -> torch.Tensor:
+    """摆动脚在"另一只脚有支撑"的时段里抬不够高就罚（walk 风格抬脚高度）。"""
+    if target_clearance <= 0.0:
+        raise ValueError("target_clearance must be positive.")
+    if maximum_air_time <= minimum_air_time:
+        raise ValueError("maximum_air_time must exceed minimum_air_time.")
+
+    asset = env.scene[feet_cfg.name]
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    assert sensor.data.current_air_time is not None, "contact sensor needs track_air_time=True"
+    assert sensor.data.current_contact_time is not None
+
+    ids = sensor_cfg.body_ids
+    air_time = sensor.data.current_air_time.torch[:, ids]
+    contact_time = sensor.data.current_contact_time.torch[:, ids]
+
+    foot_height = asset.data.body_pos_w.torch[:, feet_cfg.body_ids, 2]
+    clearance = foot_height - contact_height
+    deficit = torch.relu(target_clearance - clearance) / target_clearance
+    deficit = torch.clamp(deficit, max=1.0)
+
+    swing = (air_time > minimum_air_time) & (air_time < maximum_air_time)
+    support = torch.flip(contact_time, dims=(1,))
+    supported_swing = swing & (support > minimum_support_time)
+
+    gait_mask = _walk_style_mask(env, command_name, minimum_command, maximum_forward_speed, include_turning)
+    return torch.mean(torch.square(deficit) * supported_swing.float(), dim=-1) * gait_mask.float()
+
+def walk_air_time_tracking(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    target_air_time: float,
+    std: float,
+    minimum_support_time: float = 0.04,
+    command_name: str = "twist",
+    minimum_command: float = 0.1,
+    maximum_forward_speed: float = 0.8,
+    include_turning: bool = True,
+) -> torch.Tensor:
+    """落地时的摆动时长偏离 ``target_air_time`` 就罚（walk 风格步频/节奏）。"""
+    if std <= 0.0:
+        raise ValueError("std must be positive.")
+
+    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    assert sensor.data.last_air_time is not None, "contact sensor needs track_air_time=True"
+    assert sensor.data.current_contact_time is not None
+
+    ids = sensor_cfg.body_ids
+    # IsaacLab returns a float 0/1 mask here (unlike mjlab's bool), so cast before ``&``.
+    first_contact = sensor.compute_first_contact(env.step_dt).torch[:, ids] > 0.5
+    support = torch.flip(sensor.data.current_contact_time.torch[:, ids], dims=(1,))
+    supported_landing = first_contact & (support > minimum_support_time)
+
+    error = torch.clamp((sensor.data.last_air_time.torch[:, ids] - target_air_time).abs() / std, max=1.0)
+    landing_error = torch.square(error) * supported_landing.float()
+
+    gait_mask = _walk_style_mask(env, command_name, minimum_command, maximum_forward_speed, include_turning)
+    return torch.sum(landing_error, dim=-1) * gait_mask.float()
+
+def feet_crossing(env, minimum_distance: float, feet_cfg: SceneEntityCfg) -> torch.Tensor:
+    """禁止两脚交叉：左脚 y 至少比右脚 y 大 minimum_distance。"""
+    asset = env.scene[feet_cfg.name]
+    feet = _feet_positions_b(asset, feet_cfg)
+    signed = feet[:, 0, 1] - feet[:, 1, 1]
+    return torch.relu(minimum_distance - signed)
+
+def feet_spacing_non_lateral(
+    env, minimum_distance: float, maximum_distance: float,
+    lateral_command_threshold: float, feet_cfg: SceneEntityCfg, command_name: str = "twist",
+) -> torch.Tensor:
+    """非横移时强制两脚间距落在 [min, max]（横移时放开）。"""
+    asset = env.scene[feet_cfg.name]
+    feet = _feet_positions_b(asset, feet_cfg)
+    distance = feet[:, 0, 1] - feet[:, 1, 1]
+    outside = torch.relu(minimum_distance - distance) + torch.relu(distance - maximum_distance)
+    non_lateral = env.command_manager.get_command(command_name)[:, 1].abs() < lateral_command_threshold
+    return outside * non_lateral.float()
+
+def feet_support_roll_l2(env, feet_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
+                         moving_threshold: float = 0.1, contact_force_threshold: float = 5.0):
+    """支撑脚的 roll（重力 y 分量）平方：防崴脚。"""
+    asset = env.scene[feet_cfg.name]
+    quat = asset.data.body_quat_w.torch[:, feet_cfg.body_ids, :]
+    gravity = asset.data.GRAVITY_VEC_W.torch
+    gravity = torch.nn.functional.normalize(gravity, dim=-1).unsqueeze(1).expand(-1, quat.shape[1], -1)
+    roll_err = torch.square(quat_apply_inverse(quat, gravity)[:, :, 1])
+    sensor: ContactSensor = env.sensors[sensor_cfg.name] if False else env.scene.sensors[sensor_cfg.name]
+    peak = torch.linalg.vector_norm(
+        sensor.data.net_forces_w_history.torch[:, :, sensor_cfg.body_ids], dim=-1).amax(dim=1)
+    support = (peak > contact_force_threshold).float()
+    return torch.sum(roll_err * support, dim=1) * moving_mask(env).float()
+
+def stable_stand_feet_spacing_l1(
+    env, feet_cfg: SceneEntityCfg, torso_cfg: SceneEntityCfg, sensor_cfg: SceneEntityCfg,
+    target_spacing: float = 0.22, spacing_deadband: float = 0.01,
+    command_name: str = "twist", command_threshold: float = 0.1,
+    planar_speed_scale: float = 0.4, torso_ang_vel_scale: float = 0.8,
+    contact_force_threshold: float = 20.0,
+) -> torch.Tensor:
+    """站立时把两脚横向上间距拉回默认站姿（Z1 默认 ≈0.22 m）。"""
+    asset = env.scene[feet_cfg.name]
+    feet = _feet_positions_b(asset, feet_cfg)          # (N, 2, 3) base 系
+    spacing = feet[:, 0, 1] - feet[:, 1, 1]            # left.y - right.y
+    error = torch.relu((spacing - target_spacing).abs() - spacing_deadband)
+    weight = _stable_stand_weight(env, sensor_cfg, torso_cfg, command_name, command_threshold,
+                                  planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
+    return error * weight

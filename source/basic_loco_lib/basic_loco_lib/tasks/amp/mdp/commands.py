@@ -43,6 +43,14 @@ class AmpVelocityCommandCfg(UniformVelocityCommandCfg):
     lateral_deadband: float = 0.1
     """Minimum |lin_vel_y| for pure lateral commands."""
 
+    standing_threshold: float = 0.1
+    """|v_xy| + |w_z| at or below this value is re-tagged as a standing command.
+
+    The mixed bucket is sampled uniformly, so a fair share of mixed envs end up with an
+    almost-zero command. Without this fallback those envs stay labelled ``MIXED`` and every
+    standing-only reward term (``_standing_mask``) silently skips them.
+    """
+
     @configclass
     class Ranges(UniformVelocityCommandCfg.Ranges):
         pure_turn_ang_vel: tuple[float, float] = (0.0, 0.0)
@@ -111,3 +119,19 @@ class AmpVelocityCommand(UniformVelocityCommand):
         self.vel_command_b[lateral_ids, 1] = self._sample_outside_deadband(
             len(lateral_ids), self.cfg.ranges.pure_lateral_lin_vel, self.cfg.lateral_deadband
         )
+
+        # --- Fallback: a mixed command that is effectively zero is really a standing env.
+        # Keep ``command_mode`` in sync with the actual command so that ``_standing_mask``
+        # (used by every stand_* reward term) covers these envs as well.
+        magnitude = (
+            torch.linalg.vector_norm(self.vel_command_b[env_index, :2], dim=1)
+            + self.vel_command_b[env_index, 2].abs()
+        )
+        near_zero = (magnitude <= self.cfg.standing_threshold) & (
+            self.command_mode[env_index] == COMMAND_MODE_MIXED
+        )
+        if near_zero.any():
+            quiet_ids = env_index[near_zero]
+            self.command_mode[quiet_ids] = COMMAND_MODE_STANDING
+            self.is_standing_env[quiet_ids] = True
+            self.vel_command_b[quiet_ids] = 0.0

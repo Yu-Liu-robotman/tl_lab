@@ -192,8 +192,11 @@ def main():
                     ]
                 )
                 if not obs_buffer:
-                    for _ in range(obs_history_length):
-                        obs_buffer.append(obs)
+                    # Match the training-side history init: obs_history_length-1 zero frames
+                    # plus the real frame (IsaacLab zero-fills the obs history at reset).
+                    for _ in range(obs_history_length - 1):
+                        obs_buffer.append(np.zeros_like(obs))
+                    obs_buffer.append(obs)
                 else:
                     obs_buffer.append(obs)
 
