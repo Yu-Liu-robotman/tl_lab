@@ -336,6 +336,22 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
         observations = getattr(self, "observations", None)
         if not patterns or observations is None:
             return
+
+        amp_group = getattr(observations, "amp", None)
+        all_joints = list(getattr(self.scene.robot, "joint_sdk_names", None) or ())
+        if amp_group is not None and all_joints:
+            kept_joints = [name for name in all_joints if not any(re.fullmatch(p, name) for p in patterns)]
+            ignored_joints = [name for name in all_joints if name not in kept_joints]
+            if ignored_joints:
+                for term_name in ("joint_pos", "joint_vel", "joint_pos_rel", "joint_vel_rel"):
+                    term = getattr(amp_group, term_name, None)
+                    if isinstance(term, ObsTerm):
+                        term.params = {
+                            **(term.params or {}),
+                            "asset_cfg": SceneEntityCfg("robot", joint_names=list(kept_joints)),
+                        }
+                print(f"[INFO] AMP joints: {len(kept_joints)}/{len(all_joints)} | ignored: {ignored_joints}")
+
         dropped: list[str] = []
         for group in vars(observations).values():
             if not isinstance(group, ObsGroup):

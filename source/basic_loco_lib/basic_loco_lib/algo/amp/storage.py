@@ -7,23 +7,27 @@ import torch
 class ReplayBuffer:
     """Fixed-size buffer to store experience tuples."""
 
-    def __init__(self, obs_dim, buffer_size, device, label_dim=0):
+    def __init__(self, obs_dim, buffer_size, device, label_dim=0, store_next=True):
         self.buffer_size = buffer_size
         self.device = device
+        self.store_next = store_next
         self.buffers = {
             "states": torch.zeros(buffer_size, obs_dim, device=device),
-            "next_states": torch.zeros(buffer_size, obs_dim, device=device),
         }
+        if store_next:
+            self.buffers["next_states"] = torch.zeros(buffer_size, obs_dim, device=device)
         if label_dim > 0:
             self.buffers["labels"] = torch.zeros(buffer_size, label_dim, device=device)
 
         self.step = 0
         self.num_samples = 0
 
-    def insert(self, states, next_states, labels=None):
+    def insert(self, states, next_states=None, labels=None):
         if states.shape[0] == 0:
             return
-        data = {"states": states, "next_states": next_states}
+        data = {"states": states}
+        if self.store_next:
+            data["next_states"] = next_states
         if labels is not None and "labels" in self.buffers:
             data["labels"] = labels
         num_states = states.shape[0]

@@ -65,7 +65,9 @@ class RslRlAmpRunnerCfg(RslRlOnPolicyRunnerCfg):
     amp_motion_files: str = ""
     amp_num_preload_transitions: int = 200000
     amp_task_reward_lerp: float = 0.7
-    amp_discr_hidden_dims: list = (1024, 512, 256)
+    # amp_discr_hidden_dims: list = (1024, 512, 256)
+    amp_discr_hidden_dims: list = (1024, 512)
+    amp_num_frames: int = 4
     min_normalized_std: list = (0.05,) * 29
     amp_body_names: tuple = ()
     amp_anchor_name: str = ""
@@ -107,24 +109,6 @@ def g1_amp_warp_ppo_runner_cfg() -> RslRlAmpRunnerCfg:
     return cfg
 
 
-# Tlibot Z1 uses ``base_link`` as its root and ``torso_yaw_link`` as the trunk
-# anchor (it has no ``torso_link``); legs/arms are prefixed ``leg_*`` / ``arm_*``.
-Z1_AMP_BODY_NAMES: tuple = (
-    "base_link",
-    "leg_left_hip_roll_link",
-    "leg_left_knee_link",
-    "leg_left_ankle_roll_link",
-    "leg_right_hip_roll_link",
-    "leg_right_knee_link",
-    "leg_right_ankle_roll_link",
-    "arm_left_shoulder_roll_link",
-    "arm_left_elbow_link",
-    "arm_left_wrist_yaw_link",
-    "arm_right_shoulder_roll_link",
-    "arm_right_elbow_link",
-    "arm_right_wrist_yaw_link",
-)
-
 Z1_AMP_MOTION_DIR = PROJECT_DIR / "data" / "z1_amp" / "output" / "npz"
 Z1_AMP_MOTION_FILES: tuple = tuple(sorted(str(path) for path in Path(Z1_AMP_MOTION_DIR).glob("*.npz")))
 Z1_AMP_MOTION_SPEC_BY_FILE: dict[str, tuple[str, float]] = {
@@ -152,8 +136,6 @@ def z1_amp_ppo_runner_cfg() -> RslRlAmpRunnerCfg:
     """Create RL runner configuration for the Tlibot Z1 AMP locomotion task."""
     cfg = RslRlAmpRunnerCfg(
         amp_motion_files=str(Z1_AMP_MOTION_DIR),
-        amp_body_names=Z1_AMP_BODY_NAMES,
-        amp_anchor_name="torso_roll_link",
         amp_motion_labels=Z1_AMP_MOTION_LABELS,
         amp_motion_weights=Z1_AMP_MOTION_WEIGHTS,
         amp_motion_velocity_threshold=1.0,

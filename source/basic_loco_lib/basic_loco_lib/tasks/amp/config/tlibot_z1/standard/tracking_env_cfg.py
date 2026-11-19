@@ -32,6 +32,7 @@ from basic_loco_lib.tasks.base_cfg.base_cfg import (
     RobotEnvCfg as BaseRobotEnvCfg,
     RobotSceneCfg,
 )
+from basic_loco_lib.tasks.amp.mdp.rewards import upright_gated as _UP   # 顶部
 from basic_loco_lib.tasks.velocity import mdp
 from basic_loco_lib.tasks.velocity.terrain import TLIBOT_Z1_ROUGH_TERRAINS_CFG as TERRAIN_CFG
 """
@@ -65,20 +66,20 @@ class CommandsCfg:
         asset_name="robot",
         resampling_time_range=(3.0, 8.0),
         rel_standing_envs=0.2, # 站立占比
-        rel_turning_envs=0.1,   # 原地转向占比
-        rel_lateral_envs=0.1,   # 横移占比
+        rel_turning_envs=0.2,   # 原地转向占比
+        rel_lateral_envs=0.2,   # 横移占比
         rel_heading_envs=0.0,   # 朝向占比
         heading_command=False,
         debug_vis=False,
         ranges=amp_commands.AmpVelocityCommandCfg.Ranges(
             # forward only, and kept away from 0 so it is never a "fake stand" bucket
-            lin_vel_x=(-0.7, 1.0),
-            lin_vel_y=(-0.7, 0.7),
+            lin_vel_x=(-0.8, 1.0),
+            lin_vel_y=(-0.8, 0.8),
             ang_vel_z=(-0.7, 0.7),
             # heading=(-math.pi / 2, math.pi / 2),
             heading=(-0, 0),
-            pure_turn_ang_vel=(-0.5, 0.5),    # 纯转向桶
-            pure_lateral_lin_vel=(-0.5, 0.5), # 纯横移桶
+            pure_turn_ang_vel=(-0.6, 0.6),    # 纯转向桶
+            pure_lateral_lin_vel=(-0.6, 0.6), # 纯横移桶
         ), 
     )
 
@@ -88,6 +89,7 @@ class CommandsCfg:
 
 _AMP_BODY_NAMES = (
     "base_link",
+    "torso_roll_link",
     "leg_left_hip_roll_link",
     "leg_left_knee_link",
     "leg_left_ankle_roll_link",
@@ -96,12 +98,12 @@ _AMP_BODY_NAMES = (
     "leg_right_ankle_roll_link",
     "arm_left_shoulder_roll_link",
     "arm_left_elbow_link",
-    "arm_left_wrist_yaw_link",
+    # "arm_left_wrist_yaw_link",
     "arm_right_shoulder_roll_link",
     "arm_right_elbow_link",
-    "arm_right_wrist_yaw_link",
+    # "arm_right_wrist_yaw_link",
 )
-_ANCHOR_NAME = "torso_roll_link"
+_ANCHOR_NAME = "base_link"
 _AMP_ANCHOR_NAME = "torso_roll_link"
 
 def _amp_body_cfgs() -> dict:
@@ -145,16 +147,18 @@ class ObservationsCfg:
         feet_contact = ObsTerm(func=mdp.feet_contact_mask,params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),"threshold": 5.0})
         
         def __post_init__(self):
-            self.history_length = 10
+            self.history_length = 5
             self.concatenate_terms = True
 
     @configclass
     class AmpCfg(ObsGroup):
-        body_pos_b = ObsTerm(func=amp_obs.robot_body_pos_b, params=_amp_body_cfgs())
-        body_ori_b = ObsTerm(func=amp_obs.robot_body_ori_b, params=_amp_body_cfgs())
+        # joint_pos = ObsTerm(func=mdp.joint_pos)  # N
+        # joint_vel = ObsTerm(func=mdp.joint_vel)  # N
+        body_pos_b = ObsTerm(func=amp_obs.robot_body_pos_b, params=_amp_body_cfgs()) # _AMP_BODY_NAMES * 3
+        body_ori_b = ObsTerm(func=amp_obs.robot_body_ori_b, params=_amp_body_cfgs()) # _AMP_BODY_NAMES * 6
         body_lin_vel_b = ObsTerm(func=amp_obs.robot_body_lin_vel_b, params=_amp_body_cfgs())
-        body_ang_vel_b = ObsTerm(func=amp_obs.robot_body_ang_vel_b, params=_amp_body_cfgs())
-        root_rot_tan_norm = ObsTerm(func=amp_obs.robot_root_local_rot_tan_norm,params={"asset_cfg": SceneEntityCfg("robot", body_names=_AMP_ANCHOR_NAME)})
+        body_ang_vel_b = ObsTerm(func=amp_obs.robot_body_ang_vel_b, params=_amp_body_cfgs()) # _AMP_BODY_NAMES * 3
+        # root_rot_tan_norm = ObsTerm(func=amp_obs.robot_root_local_rot_tan_norm,params={"asset_cfg": SceneEntityCfg("robot", body_names="base_link")})
 
         def __post_init__(self):
             self.concatenate_terms = True
@@ -171,33 +175,6 @@ class ObservationsCfg:
 
 @configclass
 class RewardsCfg:
-
-    # -- base
-    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
-    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.5)
-    base_joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
-    base_joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    base_applied_torque_limits = RewTerm(func=mdp.applied_torque_limits, weight=-0.01)
-    base_action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
-    base_dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
-    base_energy = RewTerm(func=mdp.energy, weight=-2e-5)
-    base_is_terminated = RewTerm(func=mdp.is_terminated, weight=-200.0)
-    base_flat_orientation_l2 = RewTerm(func=amp_rewards.adaptive_flat_orientation_l2, weight=-2.0)
-    # body_link -> base_link 8°  |  base_link -> world_link   |  body_link -> world_link 8° 
-    base_body_orientation_l2 = RewTerm(
-        func=amp_rewards.body_flat_orientation_l2, weight=-10.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
-                "pitch_offset": 8 * math.pi / 180,      # +8.00°，扣掉 URDF 安装角
-                "roll_offset": 0.0, "tolerance": 0.5 * math.pi / 180,
-                "relative_to_root": False,     
-                "only_when_standing": True}, 
-    )
-    base_stand_to_commanded = RewTerm(
-        func=amp_rewards.feet_not_lifted_when_commanded, weight=-2.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
-                "command_name": "twist", "command_threshold": 0.1,
-                "min_contact_time": 0.15, "velocity_ratio": 0.5})  
-    
     track_anchor_lin_vel = RewTerm(
         func=amp_rewards.track_anchor_linear_velocity,
         weight=1.5,
@@ -220,48 +197,72 @@ class RewardsCfg:
             "anchor_cfg": SceneEntityCfg("robot", body_names=_ANCHOR_NAME),
         },
     )
-
+    # -- base
+    base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
+    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.5)
+    base_joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
+    base_joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    base_applied_torque_limits = RewTerm(func=mdp.applied_torque_limits, weight=-0.01)
+    base_action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.05)
+    base_dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-5.0)
+    base_energy = RewTerm(func=mdp.energy, weight=-2e-5)
+    base_is_terminated = RewTerm(func=mdp.is_terminated, weight=-200.0)
+    base_flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
+    # body_link -> base_link 8°  |  base_link -> world_link   |  body_link -> world_link 8° 
+    base_body_orientation_l2 = RewTerm(
+        func=amp_rewards.body_flat_orientation_l2, weight=-5.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
+                "pitch_offset": 8 * math.pi / 180,      # +8.00°，扣掉 URDF 安装角
+                "roll_offset": 0.0, "tolerance": 0.5 * math.pi / 180,
+                "relative_to_root": False,     
+                "only_when_standing": True}, 
+    )
+    base_stand_to_commanded = RewTerm(
+        func=_UP(amp_rewards.feet_not_lifted_when_commanded), weight=-2.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*"),
+                "command_name": "twist", "command_threshold": 0.1,
+                "min_contact_time": 0.15, "velocity_ratio": 0.5})  
+    
     feet_not_lifted_when_turning = RewTerm(
-        func=amp_rewards.feet_not_lifted_when_turning, weight=-1.0,
+        func=_UP(amp_rewards.feet_not_lifted_when_turning), weight=-1.0,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
                 "command_name": "twist", "command_threshold": 0.15,
                 "min_contact_time": 0.10, "velocity_ratio": 0.5},
     )
-    feet_air_time_turning = RewTerm(
-        func=amp_rewards.feet_air_time_turning, weight=1.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
-                "command_name": "twist", "command_threshold": 0.15,
-                "min_air_time": 0.12, "air_cap": 0.2},
-    )  
-    
+
     # ---- walk gait shaping (ported from DroidUpE1_mjlab) ----
-    walk_swing_foot_clearance = RewTerm(
-        func=amp_rewards.walk_swing_foot_clearance, weight=-0.15,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
-                "feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True),
-                "contact_height": 0.06,      # 踝 link 到鞋底的距离（需实测）
-                "target_clearance": 0.08,
-                "minimum_air_time": 0.16, "maximum_air_time": 0.36,
-                "minimum_support_time": 0.04,
-                "maximum_forward_speed": 0.8, "include_turning": True})
-    walk_air_time_tracking = RewTerm(
-        func=amp_rewards.walk_air_time_tracking, weight=-0.2,
-        params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
-                "target_air_time": 0.48, "std": 0.12,   # 0.48 s 摆动 -> ~0.96 s 周期（按实测步频调）
-                "minimum_support_time": 0.04,
-                "maximum_forward_speed": 0.8, "include_turning": True})     
+    swing_foot_clearance = RewTerm(
+        func=_UP(amp_rewards.walk_swing_foot_clearance), weight=-2.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
+            "asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*", preserve_order=True),
+            "contact_height": 0.057,
+            "target_clearance": 0.035,
+            "minimum_air_time": 0.04,
+            "maximum_air_time": 0.45,
+            "minimum_support_time": 0.02,
+            "minimum_speed": 0.1,
+            "maximum_forward_speed": 1.0,
+            "command_name": "twist",
+        },
+    )
+    feet_slide = RewTerm(
+        func=mdp.feet_slide, weight=-1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=".*ankle_roll.*"),
+                "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*")},
+    )
     # ---- standing shaping (ported from DroidUpE1_mjlab) ----
     stand_hip_yaw = RewTerm(
-        func=amp_rewards.zero_command_joint_l2, weight=-5.0,
+        func=_UP(amp_rewards.zero_command_joint_l2), weight=-5.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint"])})
     stand_torso_yaw = RewTerm(                                 # 参考的 waist_yaw
-        func=amp_rewards.zero_command_joint_l2, weight=-2.0,
+        func=_UP(amp_rewards.zero_command_joint_l2), weight=-2.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["torso_yaw_joint"])})
     stand_feet_heading = RewTerm(
-        func=amp_rewards.stand_feet_heading_l2, weight=-2.0,
+        func=_UP(amp_rewards.stand_feet_heading_l2), weight=-2.0,
         params={"feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True)})
     stable_stand_hip_roll = RewTerm(
-        func=amp_rewards.stable_stand_hip_roll_norm, weight=-2.0,
+        func=_UP(amp_rewards.stable_stand_hip_roll_norm), weight=-2.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_roll_joint"]),
                 "torso_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*",
@@ -269,7 +270,7 @@ class RewardsCfg:
                 "planar_speed_scale": 0.4, "torso_ang_vel_scale": 0.8,
                 "contact_force_threshold": 20.0})
     stable_stand_feet_fore_aft = RewTerm(
-        func=amp_rewards.stable_stand_feet_fore_aft_l1, weight=-2.0,
+        func=_UP(amp_rewards.stable_stand_feet_fore_aft_l1), weight=-2.0,
         params={"feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True),
                 "torso_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*",
@@ -277,7 +278,7 @@ class RewardsCfg:
                 "planar_speed_scale": 0.4, "torso_ang_vel_scale": 0.8,
                 "contact_force_threshold": 20.0})
     stable_stand_feet_lateral_center = RewTerm(
-        func=amp_rewards.stable_stand_feet_lateral_center_l1, weight=-5.0,
+        func=_UP(amp_rewards.stable_stand_feet_lateral_center_l1), weight=-5.0,
         params={"feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True),
                 "torso_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*",
@@ -285,26 +286,26 @@ class RewardsCfg:
                 "planar_speed_scale": 0.2, "torso_ang_vel_scale": 0.8,
                 "contact_force_threshold": 5.0})
     stable_stand_feet_spacing = RewTerm(
-        func=amp_rewards.stable_stand_feet_spacing_l1, weight=-8.0,
+        func=_UP(amp_rewards.stable_stand_feet_spacing_l1), weight=-8.0,
         params={"feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True),
                 "torso_cfg": SceneEntityCfg("robot", body_names=["torso_roll_link"]),
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True),
                 "target_spacing": 0.22, "spacing_deadband": 0.01,
                 "planar_speed_scale": 0.4, "torso_ang_vel_scale": 0.8,
                 "contact_force_threshold": 20.0})
-    base_stand_lin_vel = RewTerm(func=amp_rewards.standing_lin_vel_xy_l2, weight=-2.0,
+    base_stand_lin_vel = RewTerm(func=_UP(amp_rewards.standing_lin_vel_xy_l2), weight=-2.0,
         params={"command_name": "twist", "command_threshold": 0.1})
     feet_crossing = RewTerm(
-        func=amp_rewards.feet_crossing, weight=-2.0,
+        func=_UP(amp_rewards.feet_crossing), weight=-2.0,
         params={"minimum_distance": 0.16,
                 "feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True)})
     feet_spacing = RewTerm(
-        func=amp_rewards.feet_spacing_non_lateral, weight=-1.0,
+        func=_UP(amp_rewards.feet_spacing_non_lateral), weight=-1.0,
         params={"minimum_distance": 0.18, "maximum_distance": 0.28,
                 "lateral_command_threshold": 0.1,
                 "feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True)})
     feet_support_roll = RewTerm(
-        func=amp_rewards.feet_support_roll_l2, weight=-2.0,
+        func=_UP(amp_rewards.feet_support_roll_l2), weight=-2.0,
         params={"feet_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"], preserve_order=True),
                 "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*ankle_roll.*", preserve_order=True)})
 ##
@@ -344,7 +345,7 @@ class RobotEnvCfg(BaseRobotEnvCfg):
     curriculum: PushCurriculumCfg = PushCurriculumCfg()
     ignored_action_joints: tuple[str, ...] = (".*_wrist_.*",)
     # ignored_amp_joints: tuple[str, ...] = ("arm_.*",)
-    ignored_amp_joints: tuple[str, ...] = ()
+    ignored_amp_joints: tuple[str, ...] = (".*_wrist_.*",)
     def configure_robot(self):
         self.scene.robot = ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
         # self.scene.terrain.terrain_generator = TERRAIN_CFG.copy()
@@ -374,6 +375,7 @@ class RobotEnvCfg(BaseRobotEnvCfg):
             mode="reset",
             params={
                 "motion_dir": str(Z1_AMP_MOTION_DIR),
+                "motion_reset_ratio": 0.8,
                 "asset_cfg": SceneEntityCfg("robot", joint_names=[".*"]),
             },
         )
@@ -403,7 +405,6 @@ class RobotEnvCfg(BaseRobotEnvCfg):
             )
             self.events.init_motion_loader = None
             self.events.reset_from_motion = None
-        self.events.reset_from_motion = None
 
     def play_mode(self):
         super().play_mode()

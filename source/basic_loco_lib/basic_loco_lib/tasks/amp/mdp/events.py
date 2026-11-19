@@ -211,9 +211,22 @@ def reset_from_motion_data(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor | slice | None,
     motion_dir: str,
+    motion_reset_ratio: float = 1.0,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> None:
-    """Reset event: reset envs from random motion frames."""
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)
+    elif isinstance(env_ids, slice):
+        env_ids = torch.arange(env.num_envs, device=env.device, dtype=torch.int)[env_ids]
+
+    ratio = float(motion_reset_ratio)
+    if ratio <= 0.0 or len(env_ids) == 0:
+        return
+    if ratio < 1.0:
+        env_ids = env_ids[torch.rand(len(env_ids), device=env.device) < ratio]
+        if len(env_ids) == 0:
+            return
+
     MotionResetManager.get(env).reset(
         env=env,
         env_ids=env_ids,

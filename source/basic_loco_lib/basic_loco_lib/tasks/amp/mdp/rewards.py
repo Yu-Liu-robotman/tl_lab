@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+import functools          # ← 新增
 
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import ContactSensor
@@ -376,16 +377,44 @@ def feet_not_lifted_when_turning(
     both_planted = (ct > min_contact_time).all(dim=-1)
     return (is_commanded & not_turning & both_planted).float()
 
-def feet_air_time_turning(
-    env, sensor_cfg: SceneEntityCfg, command_name: str = "twist",
-    command_threshold: float = 0.15, min_air_time: float = 0.08, air_cap: float = 0.30,
+def feet_air_time_turning_in_place(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    command_name: str = "twist",
+    command_threshold: float = 0.15,
+    min_air_time: float = 0.08,
+    air_cap: float = 0.30,
+    minimum_support_time: float = 0.04,
+    require_support: bool = True,
 ) -> torch.Tensor:
-    """原地转向时，每迈出一步（离地够久再落地）给奖励，按离地时长线性计分。"""
+    """被要求原地转向时，每只脚落地就按其摆动时长给正奖励（鼓励抬脚换步）。
+
+    单脚 credit = clamp(last_air_time, min_air_time, air_cap) / air_cap，越接近 air_cap 得分越高。
+    ``require_support=True`` 时只统计“另一只脚还在支撑”的落地，避免跳过腾空惩罚动作。
+    """
+    if air_cap <= min_air_time:
+        raise ValueError("air_cap must exceed min_air_time.")
+
     sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-    first_contact = sensor.compute_first_contact(env.step_dt).torch[:, sensor_cfg.body_ids].float()
-    air = sensor.data.last_air_time.torch[:, sensor_cfg.body_ids]
-    step = torch.clamp(air, max=air_cap) * (air > min_air_time).float() * first_contact
-    return step.sum(dim=-1) * _turning_mask(env, command_name, command_threshold).float()
+    assert sensor.data.last_air_time is not None, "contact sensor needs track_air_time=True"
+    assert sensor.data.current_contact_time is not None
+
+    ids = sensor_cfg.body_ids
+    # IsaacLab returns a float 0/1 mask here, so cast before ``&``.
+    first_contact = sensor.compute_first_contact(env.step_dt).torch[:, ids] > 0.5
+    air_time = sensor.data.last_air_time.torch[:, ids]
+    credit = torch.clamp(air_time, min=min_air_time, max=air_cap) / air_cap
+
+    if require_support:
+        support = torch.flip(sensor.data.current_contact_time.torch[:, ids], dims=(1,))
+        landed = first_contact & (support > minimum_support_time)
+    else:
+        landed = first_contact
+
+    reward = torch.sum(credit * landed.float(), dim=-1)
+
+    is_commanded = _turning_mask(env, command_name, command_threshold)
+    return reward * is_commanded.float()
 
 
 def body_flat_orientation_l2(
@@ -580,74 +609,52 @@ def _walk_style_mask(
 def walk_swing_foot_clearance(
     env,
     sensor_cfg: SceneEntityCfg,
-    feet_cfg: SceneEntityCfg,
     contact_height: float,
     target_clearance: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     minimum_air_time: float = 0.16,
     maximum_air_time: float = 0.36,
     minimum_support_time: float = 0.04,
-    command_name: str = "twist",
-    minimum_command: float = 0.1,
+    minimum_speed: float = 0.1,
     maximum_forward_speed: float = 0.8,
-    include_turning: bool = True,
+    command_name: str = "twist",
 ) -> torch.Tensor:
-    """摆动脚在"另一只脚有支撑"的时段里抬不够高就罚（walk 风格抬脚高度）。"""
+    """有移动指令时，摆动脚抬不够高就罚（抬脚高度整形项）。
+
+    框架适配：body/sensor 走 ``.torch``；指令走 ``command_manager``；
+    地面高度用 ``env_origins``；``sensor_cfg`` 与 ``asset_cfg`` 都必须
+    ``preserve_order=True``，否则左右脚索引对不上。
+    """
     if target_clearance <= 0.0:
         raise ValueError("target_clearance must be positive.")
     if maximum_air_time <= minimum_air_time:
         raise ValueError("maximum_air_time must exceed minimum_air_time.")
 
-    asset = env.scene[feet_cfg.name]
+    asset = env.scene[asset_cfg.name]
     sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     assert sensor.data.current_air_time is not None, "contact sensor needs track_air_time=True"
     assert sensor.data.current_contact_time is not None
+    if len(sensor_cfg.body_ids) != len(asset_cfg.body_ids):
+        raise ValueError("sensor_cfg / asset_cfg must select the same feet (use preserve_order=True)")
 
-    ids = sensor_cfg.body_ids
-    air_time = sensor.data.current_air_time.torch[:, ids]
-    contact_time = sensor.data.current_contact_time.torch[:, ids]
-
-    foot_height = asset.data.body_pos_w.torch[:, feet_cfg.body_ids, 2]
+    ground_z = env.scene.env_origins[:, 2]                                  # (N,)
+    foot_height = asset.data.body_pos_w.torch[:, asset_cfg.body_ids, 2] - ground_z.unsqueeze(-1)
     clearance = foot_height - contact_height
-    deficit = torch.relu(target_clearance - clearance) / target_clearance
-    deficit = torch.clamp(deficit, max=1.0)
+    clearance_deficit = torch.clamp(
+        torch.relu(target_clearance - clearance) / target_clearance, max=1.0
+    )
 
+    air_time = sensor.data.current_air_time.torch[:, sensor_cfg.body_ids]
     swing = (air_time > minimum_air_time) & (air_time < maximum_air_time)
-    support = torch.flip(contact_time, dims=(1,))
+    support = torch.flip(sensor.data.current_contact_time.torch[:, sensor_cfg.body_ids], dims=(1,))
     supported_swing = swing & (support > minimum_support_time)
 
-    gait_mask = _walk_style_mask(env, command_name, minimum_command, maximum_forward_speed, include_turning)
-    return torch.mean(torch.square(deficit) * supported_swing.float(), dim=-1) * gait_mask.float()
+    command = env.command_manager.get_command(command_name)                 # (N, 3) = [vx, vy, wz]
+    gait_mask = (_cmd_magnitude(env, command_name) > minimum_speed) \
+                & (command[:, 0] <= maximum_forward_speed)
 
-def walk_air_time_tracking(
-    env,
-    sensor_cfg: SceneEntityCfg,
-    target_air_time: float,
-    std: float,
-    minimum_support_time: float = 0.04,
-    command_name: str = "twist",
-    minimum_command: float = 0.1,
-    maximum_forward_speed: float = 0.8,
-    include_turning: bool = True,
-) -> torch.Tensor:
-    """落地时的摆动时长偏离 ``target_air_time`` 就罚（walk 风格步频/节奏）。"""
-    if std <= 0.0:
-        raise ValueError("std must be positive.")
+    return torch.mean(torch.square(clearance_deficit) * supported_swing.float(), dim=-1) * gait_mask.float()
 
-    sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-    assert sensor.data.last_air_time is not None, "contact sensor needs track_air_time=True"
-    assert sensor.data.current_contact_time is not None
-
-    ids = sensor_cfg.body_ids
-    # IsaacLab returns a float 0/1 mask here (unlike mjlab's bool), so cast before ``&``.
-    first_contact = sensor.compute_first_contact(env.step_dt).torch[:, ids] > 0.5
-    support = torch.flip(sensor.data.current_contact_time.torch[:, ids], dims=(1,))
-    supported_landing = first_contact & (support > minimum_support_time)
-
-    error = torch.clamp((sensor.data.last_air_time.torch[:, ids] - target_air_time).abs() / std, max=1.0)
-    landing_error = torch.square(error) * supported_landing.float()
-
-    gait_mask = _walk_style_mask(env, command_name, minimum_command, maximum_forward_speed, include_turning)
-    return torch.sum(landing_error, dim=-1) * gait_mask.float()
 
 def feet_crossing(env, minimum_distance: float, feet_cfg: SceneEntityCfg) -> torch.Tensor:
     """禁止两脚交叉：左脚 y 至少比右脚 y 大 minimum_distance。"""
@@ -697,3 +704,28 @@ def stable_stand_feet_spacing_l1(
     weight = _stable_stand_weight(env, sensor_cfg, torso_cfg, command_name, command_threshold,
                                   planar_speed_scale, torso_ang_vel_scale, contact_force_threshold)
     return error * weight
+
+# --------------------------------------------------------------------------- #
+# Upright gate -- 摔倒后把所有 shaping 项清零
+# --------------------------------------------------------------------------- #
+
+def upright_mask(
+    env,
+    min_root_height: float = 0.60,
+    min_gravity_z: float = -0.60,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    asset = env.scene[asset_cfg.name]
+    ground_z = env.scene.env_origins[:, 2]
+    height = asset.data.root_pos_w.torch[:, 2] - ground_z
+    gravity_z = asset.data.projected_gravity_b.torch[:, 2]
+    return (height > min_root_height) & (gravity_z < min_gravity_z)
+
+
+def upright_gated(func, min_root_height: float = 0.60, min_gravity_z: float = -0.60):
+    """把任意 reward 函数包成"未摔倒才生效"（摔倒 → 该项恒 0）。"""
+    @functools.wraps(func)
+    def _wrapped(env, *args, **kwargs):
+        value = func(env, *args, **kwargs)
+        return value * upright_mask(env, min_root_height, min_gravity_z).float()
+    return _wrapped

@@ -3,28 +3,117 @@
 
 from __future__ import annotations
 
+import copy
 import numpy as np
 import os
 import torch
 from collections.abc import Sequence
-from tqdm import tqdm
 
-from isaaclab.utils.math import (
-    matrix_from_quat,
-    quat_apply_inverse,
-    quat_conjugate,
-    quat_mul,
-    subtract_frame_transforms,
-    yaw_quat,
-)
+from isaaclab.utils.string import resolve_matching_names
 
 from .motion_labels import AMP_LABEL_DIM, AMP_LABEL_NAMES, label_from_name, label_index
 
 
+class _Arr:
+    """Stand-in for IsaacLab's ProxyArray: exposes ``.torch``."""
+
+    __slots__ = ("torch",)
+
+    def __init__(self, tensor: torch.Tensor):
+        self.torch = tensor
+
+
+class _MotionData:
+    """ArticulationData-shaped view of one motion clip."""
+
+    def __init__(self, tensors: dict[str, torch.Tensor], default_joint_pos: torch.Tensor):
+        num_frames = tensors["body_pos_w"].shape[0]
+        self.body_pos_w = _Arr(tensors["body_pos_w"])
+        self.body_quat_w = _Arr(tensors["body_quat_w"])
+        self.body_link_lin_vel_w = _Arr(tensors["body_lin_vel_w"])
+        self.body_link_ang_vel_w = _Arr(tensors["body_ang_vel_w"])
+        self.joint_pos = _Arr(tensors["joint_pos"])
+        self.joint_vel = _Arr(tensors["joint_vel"])
+        self.default_joint_pos = _Arr(default_joint_pos.unsqueeze(0).expand(num_frames, -1))
+        self.default_joint_vel = _Arr(torch.zeros_like(self.default_joint_pos.torch))
+
+
+class _MotionAsset:
+    def __init__(self, body_names: Sequence[str], joint_names: Sequence[str], data: _MotionData):
+        self.body_names = list(body_names)
+        self.joint_names = list(joint_names)
+        self.data = data
+
+
+class _MotionScene:
+    def __init__(self, asset: _MotionAsset):
+        self._asset = asset
+
+    def __getitem__(self, _name: str) -> _MotionAsset:
+        return self._asset
+
+
+class MotionEnv:
+    """Minimal env surface for the AMP observation terms; ``num_envs`` is the frame count."""
+
+    def __init__(
+        self,
+        tensors: dict[str, torch.Tensor],
+        body_names: Sequence[str],
+        joint_names: Sequence[str],
+        default_joint_pos: torch.Tensor,
+        device: str,
+        step_dt: float = 0.02,
+    ):
+        self.device = device
+        self.step_dt = step_dt
+        self.physics_dt = step_dt
+        self.num_envs = int(tensors["body_pos_w"].shape[0])
+        self.scene = _MotionScene(
+            _MotionAsset(body_names, joint_names, _MotionData(tensors, default_joint_pos))
+        )
+
+
+def _resolve_entity_cfg(cfg, asset: _MotionAsset):
+    """Resolve a SceneEntityCfg's names against ``asset`` (motion clip ordering)."""
+    cfg = copy.deepcopy(cfg)
+    if cfg.body_names is not None:
+        names = [cfg.body_names] if isinstance(cfg.body_names, str) else list(cfg.body_names)
+        ids, resolved = resolve_matching_names(names, asset.body_names, preserve_order=cfg.preserve_order)
+        cfg.body_ids, cfg.body_names = ids, resolved
+    if cfg.joint_names is not None:
+        names = [cfg.joint_names] if isinstance(cfg.joint_names, str) else list(cfg.joint_names)
+        ids, resolved = resolve_matching_names(names, asset.joint_names, preserve_order=cfg.preserve_order)
+        cfg.joint_ids, cfg.joint_names = ids, resolved
+    return cfg
+
+
+def amp_features_from_group(group_cfg, motion_env: MotionEnv) -> torch.Tensor:
+    """Concatenate the group's ObsTerms by calling each ``func`` on ``motion_env``."""
+    chunks: list[torch.Tensor] = []
+    for term in vars(group_cfg).values():
+        func = getattr(term, "func", None)
+        if func is None:
+            continue
+        params = {}
+        for key, value in (term.params or {}).items():
+            if hasattr(value, "body_names"):
+                value = _resolve_entity_cfg(value, motion_env.scene["robot"])
+            params[key] = value
+        chunks.append(func(motion_env, **params))
+    if not chunks:
+        raise ValueError("[AMPLoader] AMP observation group is empty")
+    return torch.cat(chunks, dim=-1)
+
+
+_NPZ_KEYS = ("body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w", "joint_pos", "joint_vel")
+
+
 class AMPLoader:
     def __init__(self, motion_file: str,
-                 body_names: Sequence[str],
-                 anchor_name: str,
+                 group_cfg=None,
+                 default_joint_pos: torch.Tensor | None = None,
+                 num_frames: int = 2,
                  device: str = "cuda:0",
                  labels: Sequence[str] = (),
                  weights: Sequence[float] = ()):
@@ -32,15 +121,18 @@ class AMPLoader:
 
         Args:
             motion_file: Path to a single .npz file or a directory of .npz files.
-            body_names: Names of the target bodies to track.
-            anchor_name: Name of the anchor (root) body.
+            group_cfg: The env's AMP observation group (``env.cfg.observations.amp``). Every
+                term in it is replayed on the motion data, in declaration order.
+            default_joint_pos: Robot default joint positions, used by ``*_rel`` joint terms.
+            num_frames: Number of consecutive frames per sampled expert window.
             device: Torch device.
             labels: Per-clip style label enabling label conditioning (empty disables it).
             weights: Optional per-clip sampling weight.
         """
         assert os.path.exists(motion_file), f"Invalid path: {motion_file}"
-
-        self._num_bodies = len(body_names)
+        if group_cfg is None:
+            raise ValueError("AMPLoader needs the env AMP observation group: group_cfg=env.cfg.observations.amp")
+        self.num_frames = max(1, int(num_frames))
 
         # Resolve a motion file or directory.
         if os.path.isfile(motion_file):
@@ -61,120 +153,62 @@ class AMPLoader:
             raise ValueError(f"Path is neither a file nor a directory: {motion_file}")
 
         self.motion_names = motion_names
-        self._body_pos_b_list = []
-        self._body_quat_b_list = []
-        self._body_ori_b_list = []
-        self._body_lin_vel_b_list = []
-        self._body_ang_vel_b_list = []
-        self._root_rot_tan_norm_list = []
+        self._obs_list: list[torch.Tensor] = []
+        self._lengths: list[int] = []
 
         for motion_idx, (motion_name, motion_path) in enumerate(zip(motion_names, motion_files)):
             print(f"Processing motion {motion_idx+1}/{len(motion_files)}: {motion_name}")
             data = np.load(motion_path)
-            file_body_names = data["body_names"].tolist()
-            body_indexes = [file_body_names.index(name) for name in body_names]
-            anchor_index = file_body_names.index(anchor_name)
-
             if motion_idx == 0:
                 self.fps = data["fps"]
 
-            _dof_pos = torch.tensor(data["joint_pos"], dtype=torch.float32, device=device)
-            _dof_vel = torch.tensor(data["joint_vel"], dtype=torch.float32, device=device)
-            _body_pos_w = torch.tensor(data["body_pos_w"], dtype=torch.float32, device=device)
-            _body_quat_w = torch.tensor(data["body_quat_w"], dtype=torch.float32, device=device)
-            _body_lin_vel_w = torch.tensor(data["body_lin_vel_w"], dtype=torch.float32, device=device)
-            _body_ang_vel_w = torch.tensor(data["body_ang_vel_w"], dtype=torch.float32, device=device)
-
-            time_step_total = _dof_pos.shape[0]
-
-            _body_pos_b = torch.zeros((time_step_total, self._num_bodies, 3), dtype=torch.float32, device=device)
-            _body_quat_b = torch.zeros((time_step_total, self._num_bodies, 4), dtype=torch.float32, device=device)
-            _body_ori_b = torch.zeros((time_step_total, self._num_bodies, 6), dtype=torch.float32, device=device)
-            _body_lin_vel_b = torch.zeros((time_step_total, self._num_bodies, 3), dtype=torch.float32, device=device)
-            _body_ang_vel_b = torch.zeros((time_step_total, self._num_bodies, 3), dtype=torch.float32, device=device)
-            anchor_quat_w = _body_quat_w[:, anchor_index, :]                       # (T, 4) xyzw
-            anchor_yaw_quat = yaw_quat(anchor_quat_w)
-            anchor_quat_local = quat_mul(quat_conjugate(anchor_yaw_quat), anchor_quat_w)
-            anchor_rotm_local = matrix_from_quat(anchor_quat_local)                # (T, 3, 3)
-            _root_rot_tan_norm = torch.cat(
-                [anchor_rotm_local[:, :, 0], anchor_rotm_local[:, :, 2]], dim=-1
-            )
-
-            for frame_idx in tqdm(range(time_step_total), desc=f"Preloading AMP data for {motion_name}"):
-                tgt_anchor_pos_w = _body_pos_w[frame_idx, anchor_index, :].squeeze().unsqueeze(0).repeat(self._num_bodies, 1)
-                tgt_anchor_quat_w = _body_quat_w[frame_idx, anchor_index, :].squeeze().unsqueeze(0).repeat(self._num_bodies, 1)
-                tgt_body_pos_w = _body_pos_w[frame_idx, body_indexes, :]
-                tgt_body_quat_w = _body_quat_w[frame_idx, body_indexes, :]
-                tgt_body_lin_vel_w = _body_lin_vel_w[frame_idx, body_indexes, :]
-                tgt_body_ang_vel_w = _body_ang_vel_w[frame_idx, body_indexes, :]
-
-                tgt_robot_body_pos_b, tgt_robot_body_quat_b = (
-                    subtract_frame_transforms(
-                        tgt_anchor_pos_w,
-                        tgt_anchor_quat_w,
-                        tgt_body_pos_w,
-                        tgt_body_quat_w,
+            tensors = {
+                key: torch.tensor(data[key], dtype=torch.float32, device=device) for key in _NPZ_KEYS
+            }
+            num_joints = int(tensors["joint_pos"].shape[-1])
+            if default_joint_pos is None:
+                joint_default = torch.zeros(num_joints, dtype=torch.float32, device=device)
+            else:
+                joint_default = torch.as_tensor(default_joint_pos, dtype=torch.float32, device=device).reshape(-1)
+                if joint_default.numel() != num_joints:
+                    raise ValueError(
+                        f"default_joint_pos has {joint_default.numel()} entries but "
+                        f"'{motion_name}' has {num_joints} joints"
                     )
+
+            motion_env = MotionEnv(
+                tensors=tensors,
+                body_names=data["body_names"].tolist(),
+                joint_names=data["joint_names"].tolist(),
+                default_joint_pos=joint_default,
+                device=device,
+                step_dt=1.0 / float(np.asarray(data["fps"]).reshape(-1)[0]),
+            )
+            features = amp_features_from_group(group_cfg, motion_env)
+            if features.shape[0] != tensors["body_pos_w"].shape[0]:
+                raise ValueError(
+                    f"AMP features produced {features.shape[0]} frames but '{motion_name}' has "
+                    f"{tensors['body_pos_w'].shape[0]}"
                 )
+            self._obs_list.append(features)
+            self._lengths.append(int(features.shape[0]))
 
-                mat = matrix_from_quat(tgt_robot_body_quat_b)
-                tgt_robot_body_ori_b = mat[..., :, :2].reshape(self._num_bodies, 6)
-
-                tgt_body_lin_vel_b = quat_apply_inverse(
-                    tgt_body_quat_w,
-                    tgt_body_lin_vel_w,
-                )
-
-                tgt_body_ang_vel_b = quat_apply_inverse(
-                    tgt_body_quat_w,
-                    tgt_body_ang_vel_w,
-                )
-
-                _body_pos_b[frame_idx] = tgt_robot_body_pos_b
-                _body_quat_b[frame_idx] = tgt_robot_body_quat_b
-                _body_ori_b[frame_idx] = tgt_robot_body_ori_b
-                _body_lin_vel_b[frame_idx] = tgt_body_lin_vel_b
-                _body_ang_vel_b[frame_idx] = tgt_body_ang_vel_b
-
-            self._body_pos_b_list.append(_body_pos_b)
-            self._body_quat_b_list.append(_body_quat_b)
-            self._body_ori_b_list.append(_body_ori_b)
-            self._body_lin_vel_b_list.append(_body_lin_vel_b)
-            self._body_ang_vel_b_list.append(_body_ang_vel_b)
-            self._root_rot_tan_norm_list.append(_root_rot_tan_norm)
-
-        self.time_step_total = self._body_pos_b_list[0].shape[0]
+        self._observations = torch.cat(self._obs_list, dim=0)
+        self.time_step_total = int(self._observations.shape[0])
         self.motion_total_time = self.time_step_total / self.fps
-        self._body_pos_b = self._body_pos_b_list[0]
-        self._body_quat_b = self._body_quat_b_list[0]
-        self._body_ori_b = self._body_ori_b_list[0]
-        self._body_lin_vel_b = self._body_lin_vel_b_list[0]
-        self._body_ang_vel_b = self._body_ang_vel_b_list[0]
 
-        # Pack clips for per-sample random selection without host/device indexing.
-        self._motion_lengths = torch.tensor(
-            [frames.shape[0] for frames in self._body_pos_b_list], device=device
-        )
+        self._motion_lengths = torch.tensor(self._lengths, device=device)
         self._motion_offsets = self._motion_lengths.cumsum(0) - self._motion_lengths
-        self._observations = torch.cat(
-            [
-                torch.cat([feature.flatten(1) for feature in features], dim=-1)
-                for features in zip(
-                    self._body_pos_b_list,
-                    self._body_ori_b_list,
-                    self._body_lin_vel_b_list,
-                    self._body_ang_vel_b_list,
-                    self._root_rot_tan_norm_list,
-                )
-            ]
-        )
 
         self._setup_labels(labels, weights)
 
     @property
     def observation_dim(self) -> int:
-        # per-body pos(3) + ori(6) + lin_vel(3) + ang_vel(3), plus the yaw-invariant root orientation.
-        return (3 + 6 + 3 + 3) * self._num_bodies + 6
+        return int(self._observations.shape[-1])
+
+    @property
+    def window_dim(self) -> int:
+        return self.observation_dim * self.num_frames
 
     def _setup_labels(self, labels: Sequence[str], weights: Sequence[float]) -> None:
         names = [str(label) if label else label_from_name(name) for label, name in zip(labels, self.motion_names)]
@@ -219,9 +253,12 @@ class AMPLoader:
                 torch.bincount(label_ids, minlength=self.label_dim).to(torch.float32) / max(batch_size, 1)
             )
 
-        frame_ids = (
-            torch.rand(batch_size, device=device) * (self._motion_lengths[motion_ids] - 1)
-        ).long()
+        span = (self._motion_lengths[motion_ids] - self.num_frames).clamp(min=1)
+        frame_ids = (torch.rand(batch_size, device=device) * span).long()
         idxs = self._motion_offsets[motion_ids] + frame_ids
         labels = self._label_onehot[motion_ids] if self.label_dim > 0 else None
-        return self._observations[idxs], self._observations[idxs + 1], labels
+        return self._window(idxs), labels
+
+    def _window(self, idxs: torch.Tensor) -> torch.Tensor:
+        """Stack ``num_frames`` consecutive frames starting at ``idxs`` (oldest first)."""
+        return torch.cat([self._observations[idxs + k] for k in range(self.num_frames)], dim=-1)

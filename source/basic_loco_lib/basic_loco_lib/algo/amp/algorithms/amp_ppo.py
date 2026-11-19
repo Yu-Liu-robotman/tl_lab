@@ -71,8 +71,9 @@ class AMPPPO(PPO):
         self.amp_data = amp_data
         self.amp_normalizer = amp_normalizer
         self.amp_replay_buffer = amp_replay_buffer
+        self.num_frames = int(discriminator.num_frames)
+        self.frame_dim = int(discriminator.obs_dim)
         self.min_std = torch.tensor(min_std, device=device) if min_std is not None else None
-        self.amp_transition = RolloutStorage.Transition()
 
         super().__init__(
             actor=actor,
@@ -119,33 +120,27 @@ class AMPPPO(PPO):
                 distribution.log_std_param.clamp_(min=self.min_std.log())
 
     # ------------------------------------------------------------------
-    # Act — snapshot AMP observation for the upcoming transition pair
+    # Act
     # ------------------------------------------------------------------
 
     def act(self, obs: TensorDict) -> torch.Tensor:
-        self.amp_transition.observations = obs["amp"].clone()
         return super().act(obs)
 
     # ------------------------------------------------------------------
-    # process_env_step — insert AMP replay & delegate to parent
+    # process_env_step — insert the AMP window & delegate to parent
     # ------------------------------------------------------------------
 
     def process_env_step(
         self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
     ) -> None:
-        """Record one environment step and insert AMP transition into replay buffer."""
-        # Let base PPO store the PPO transition (with AMP-injected rewards)
-        label = getattr(self.amp_transition, "motion_label", None)
+        """Record one environment step and insert the AMP window into the replay buffer."""
+        window = extras["amp_window"]
+        window = window.reshape(window.shape[0], -1)
+        label = extras.get("amp_label")
         super().process_env_step(obs, rewards, dones, extras)
 
         valid = dones == 0
-        self.amp_replay_buffer.insert(
-            self.amp_transition.observations[valid],
-            self.amp_transition.next_observations[valid],
-            None if label is None else label[valid],
-        )
-        self.amp_transition.clear()
-        self.amp_transition.next_observations = None
+        self.amp_replay_buffer.insert(window[valid], None, None if label is None else label[valid])
 
     # ------------------------------------------------------------------
     # Update — joint PPO + discriminator training
@@ -229,29 +224,27 @@ class AMPPPO(PPO):
             if self.rnd:
                 rnd_loss = self.rnd.compute_loss(batch.observations[:original_batch_size])
 
-            # ---- Discriminator (label-conditioned) ----
-            policy_state, policy_next_state, *policy_label = sample_amp_policy
-            motion_label = policy_label[0] if policy_label else None
-            expert_state, expert_next_state, expert_label = self.amp_data.sample(batch_size, motion_label)
-            if expert_label is not None:
-                motion_label = expert_label
-            if self.amp_normalizer is not None:
-                with torch.no_grad():
-                    self.amp_normalizer.update(torch.cat((policy_state, expert_state), dim=0))
-                    policy_state = self.amp_normalizer.normalize_torch(policy_state, self.device)
-                    policy_next_state = self.amp_normalizer.normalize_torch(policy_next_state, self.device)
-                    expert_state = self.amp_normalizer.normalize_torch(expert_state, self.device)
-                    expert_next_state = self.amp_normalizer.normalize_torch(expert_next_state, self.device)
-            policy_d = self.discriminator(policy_state, policy_next_state, motion_label)
-            expert_d = self.discriminator(expert_state, expert_next_state, motion_label)
+            # ---- Discriminator (label-conditioned), one window per sample ----
+            policy_window = sample_amp_policy[0]
+            policy_label = sample_amp_policy[1] if len(sample_amp_policy) > 1 else None
+            expert_window, expert_label = self.amp_data.sample(batch_size, policy_label)
+            motion_label = expert_label if expert_label is not None else policy_label
+            policy_window = policy_window.reshape(-1, self.num_frames, self.frame_dim)
+            expert_window = expert_window.reshape(-1, self.num_frames, self.frame_dim)
+            with torch.no_grad():
+                policy_normed = self.discriminator._normalize_window(policy_window, self.amp_normalizer)
+                expert_normed = self.discriminator._normalize_window(expert_window, self.amp_normalizer)
+            policy_d = self.discriminator(policy_normed, motion_label)
+            expert_d = self.discriminator(expert_normed, motion_label)
             amp_loss = 0.5 * (
                 nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
-                + nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
+                + nn.MSELoss()(policy_d, -torch.ones(policy_d.size(), device=self.device))
             )
-            grad_pen_loss = self.discriminator.compute_grad_pen(
-                expert_state, expert_next_state, motion_label, lambda_=10
-            )
+            grad_pen_loss = self.discriminator.compute_grad_pen(expert_normed, label=motion_label, lambda_=10)
             loss += amp_loss + grad_pen_loss
+            with torch.no_grad():
+                self.amp_normalizer.update(policy_window.reshape(-1, self.frame_dim))
+                self.amp_normalizer.update(expert_window.reshape(-1, self.frame_dim))
 
             # Backward
             self.optimizer.zero_grad()

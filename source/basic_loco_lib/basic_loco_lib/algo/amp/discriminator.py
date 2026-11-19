@@ -36,6 +36,7 @@ class Discriminator(nn.Module):
         hidden_layer_sizes,
         device,
         task_reward_lerp=0.0,
+        num_frames=2,
         label_dim=0,
     ):
         super().__init__()
@@ -43,10 +44,16 @@ class Discriminator(nn.Module):
         self.device = device
         self.input_dim = input_dim
         self.label_dim = label_dim
+        self.num_frames = max(1, int(num_frames))
+        if self.input_dim % self.num_frames != 0:
+            raise ValueError(
+                f"input_dim={self.input_dim} cannot be split into num_frames={self.num_frames} frames"
+            )
+        self.obs_dim = self.input_dim // self.num_frames
 
         self.amp_reward_coef = amp_reward_coef
         amp_layers = []
-        curr_in_dim = input_dim + 2 * label_dim
+        curr_in_dim = input_dim + label_dim
         for hidden_dim in hidden_layer_sizes:
             amp_layers.append(nn.Linear(curr_in_dim, hidden_dim))
             amp_layers.append(nn.ReLU())
@@ -59,19 +66,32 @@ class Discriminator(nn.Module):
 
         self.task_reward_lerp = task_reward_lerp
 
-    def _features(self, state, next_state, label=None):
+    def _append_label(self, window, label=None):
         if self.label_dim == 0:
-            return torch.cat([state, next_state], dim=-1)
+            return window
         if label is None:
-            label = torch.zeros(state.shape[0], self.label_dim, device=state.device)
-        return torch.cat([state, label, next_state, label], dim=-1)
+            label = torch.zeros(window.shape[0], self.label_dim, device=window.device)
+        return torch.cat([window, label], dim=-1)
 
-    def forward(self, state, next_state, label=None):
-        return self.amp_linear(self.trunk(self._features(state, next_state, label)))
+    def _flatten(self, window):
+        return window.reshape(window.shape[0], -1) if window.dim() == 3 else window
 
-    def compute_grad_pen(self, expert_state, expert_next_state, label=None, lambda_=10):
-        expert_data = self._features(expert_state, expert_next_state, label)
-        expert_data.requires_grad = True
+    def forward(self, window, label=None):
+        return self.amp_linear(self.trunk(self._append_label(self._flatten(window), label)))
+
+    def _normalize_window(self, window, normalizer):
+        """Normalize every frame with the single-frame statistics."""
+        if normalizer is None:
+            return window
+        is_flat = window.dim() == 2
+        if is_flat:
+            window = window.reshape(window.shape[0], self.num_frames, self.obs_dim)
+        b, n, d = window.shape
+        out = normalizer.normalize_torch(window.reshape(b * n, d), self.device).reshape(b, n, d)
+        return out.reshape(b, n * d) if is_flat else out
+
+    def compute_grad_pen(self, window, label=None, lambda_=10):
+        expert_data = self._append_label(self._flatten(window), label).detach().clone().requires_grad_(True)
 
         disc = self.amp_linear(self.trunk(expert_data))
         ones = torch.ones(disc.size(), device=disc.device)
@@ -84,26 +104,22 @@ class Discriminator(nn.Module):
             only_inputs=True,
         )[0]
 
-        grad_pen = lambda_ * (grad.norm(2, dim=1) - 0).pow(2).mean()
-        return grad_pen
+        return lambda_ * grad.norm(2, dim=1).pow(2).mean()
 
-    def predict_amp_reward(self, state, next_state, task_reward, normalizer=None, label=None):
+    def predict_style_reward(self, window, task_reward=None, normalizer=None, label=None):
+        """AMP style reward from one flattened multi-frame window."""
         with torch.no_grad():
             self.eval()
-            if normalizer is not None:
-                state = normalizer.normalize_torch(state, self.device)
-                next_state = normalizer.normalize_torch(next_state, self.device)
-
-            d = self.amp_linear(self.trunk(self._features(state, next_state, label)))
-            reward = self.amp_reward_coef * torch.clamp(
-                1 - (1 / 4) * torch.square(d - 1), min=0
-            )
-            if self.task_reward_lerp > 0:
-                reward = self._lerp_reward(reward, task_reward.unsqueeze(-1))
+            window = self._normalize_window(window, normalizer)
+            d = self.forward(window, label)
+            style_reward = self.amp_reward_coef * torch.clamp(1 - (1 / 4) * torch.square(d - 1), min=0)
+            reward = style_reward
+            task_flat = None
+            if task_reward is not None and self.task_reward_lerp > 0:
+                reward = self._lerp_reward(style_reward, task_reward.unsqueeze(-1))
+                task_flat = task_reward.squeeze(-1)
             self.train()
-
-            reward = reward.squeeze(-1)
-        return reward, d
+        return reward.squeeze(-1), d.squeeze(-1), style_reward.squeeze(-1), task_flat
 
     def _lerp_reward(self, disc_r, task_r):
         r = (1.0 - self.task_reward_lerp) * disc_r + self.task_reward_lerp * task_r

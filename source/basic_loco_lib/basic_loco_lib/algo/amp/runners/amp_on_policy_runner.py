@@ -52,8 +52,6 @@ class AmpOnPolicyRunner(OnPolicyRunner):
         # Extract AMP-specific config keys (pop them so they don't flow into actor/critic)
         amp_reward_coef = self.cfg.pop("amp_reward_coef", 0.0)
         amp_motion_files = self.cfg.pop("amp_motion_files", "")
-        amp_body_names = self.cfg.pop("amp_body_names", ())
-        amp_anchor_name = self.cfg.pop("amp_anchor_name", "")
         amp_discr_hidden_dims = self.cfg.pop("amp_discr_hidden_dims", (1024, 512, 256))
         amp_task_reward_lerp = self.cfg.pop("amp_task_reward_lerp", 0.0)
         amp_motion_labels = self.cfg.pop("amp_motion_labels", ())
@@ -63,36 +61,49 @@ class AmpOnPolicyRunner(OnPolicyRunner):
         amp_replay_buffer_size = self.cfg.pop("amp_replay_buffer_size", 1000000)
 
         # AMP data loader
+        raw_env = self.env.unwrapped
+        self.amp_num_frames = max(2, int(self.cfg.pop("amp_num_frames", 2)))
         self.amp_data = AMPLoader(
             motion_file=amp_motion_files,
-            body_names=list(amp_body_names),
-            anchor_name=amp_anchor_name,
+            group_cfg=raw_env.cfg.observations.amp,
+            default_joint_pos=raw_env.scene["robot"].data.default_joint_pos.torch[0],
+            num_frames=self.amp_num_frames,
             device=self.device,
             labels=amp_motion_labels,
             weights=amp_motion_weights,
         )
+        print(f"[AMPPPO] AMP frame window: {self.amp_num_frames}")
         print(f"[AMPPPO] AMP observation dimension: {self.amp_data.observation_dim}")
+        print(f"[AMPPPO] AMP window dimension: {self.amp_data.window_dim}")
         print(f"[AMPPPO] AMP label dim: {self.amp_data.label_dim} {self.amp_data.motion_labels}")
 
-        # Normalizer for AMP observations
+        env_amp_dim = int(torch.tensor(raw_env.observation_manager.group_obs_dim["amp"]).prod())
+        if env_amp_dim != self.amp_data.observation_dim:
+            raise ValueError(
+                f"AMP obs mismatch: env['amp']={env_amp_dim} vs AMPLoader={self.amp_data.observation_dim}"
+            )
+
+        # Normalizer statistics are per single frame
         self.amp_normalizer = Normalizer(self.amp_data.observation_dim, device=self.device)
 
-        # Discriminator: input = concat(state, label, next_state, label)
+        # Discriminator consumes one flattened num_frames window
         self.discriminator = Discriminator(
-            self.amp_data.observation_dim * 2,
+            self.amp_data.window_dim,
             amp_reward_coef,
             list(amp_discr_hidden_dims),
             device,
             amp_task_reward_lerp,
+            num_frames=self.amp_num_frames,
             label_dim=self.amp_data.label_dim,
         ).to(self.device)
 
-        # Replay buffer for policy AMP transitions
+        # Replay buffer of policy AMP windows
         self.amp_replay_buffer = ReplayBuffer(
-            self.amp_data.observation_dim,
+            self.amp_data.window_dim,
             amp_replay_buffer_size,
             self.device,
             label_dim=self.amp_data.label_dim,
+            store_next=False,
         )
 
         # -- Create AMPPPO algorithm --
@@ -200,6 +211,7 @@ class AmpOnPolicyRunner(OnPolicyRunner):
 
         # Start learning
         obs = self.env.get_observations().to(self.device)
+        self.amp_frame_hist = obs["amp"].unsqueeze(1).repeat(1, self.amp_num_frames - 1, 1).clone()
         self.alg.train_mode()
         check_for_nan = self.cfg.get("check_for_nan", True)
         if check_for_nan:
@@ -238,6 +250,7 @@ class AmpOnPolicyRunner(OnPolicyRunner):
                         extras["terminal_amp_observations"].to(self.device),
                         obs["amp"],
                     )
+                    amp_window = torch.cat([self.amp_frame_hist, next_amp_obs.unsqueeze(1)], dim=1)
                     if check_for_nan:
                         self._check_finite(
                             {**dict(obs.items()), "rewards": rewards, "dones": dones, "next_amp_obs": next_amp_obs},
@@ -245,21 +258,24 @@ class AmpOnPolicyRunner(OnPolicyRunner):
                             step,
                         )
                     amp_label = self._command_label()
-                    amp_reward, amp_score = self.alg.discriminator.predict_amp_reward(
-                        self.alg.amp_transition.observations,
-                        next_amp_obs,
-                        rewards,
-                        normalizer=self.alg.amp_normalizer,
-                        label=amp_label,
+                    amp_reward, amp_score, style_reward, task_reward = self.alg.discriminator.predict_style_reward(
+                        amp_window, rewards, normalizer=self.alg.amp_normalizer, label=amp_label
                     )
-                    # predict_amp_reward already returns the task/AMP mixture.
-                    rewards = amp_reward.squeeze(-1)
+                    rewards = amp_reward
                     if check_for_nan:
                         self._check_finite({"amp_rewards": rewards, "amp_score": amp_score}, it, step)
-                    self.alg.amp_transition.next_observations = next_amp_obs
-                    self.alg.amp_transition.motion_label = amp_label
 
-                    # Process the step (stores PPO transition + AMP transition in replay buffer)
+                    # Advance the per-env window; reset envs restart from their first frame.
+                    self.amp_frame_hist = torch.roll(self.amp_frame_hist, shifts=-1, dims=1)
+                    self.amp_frame_hist[:, -1] = next_amp_obs
+                    reset_ids = (dones != 0).nonzero(as_tuple=False).flatten()
+                    if len(reset_ids) > 0:
+                        self.amp_frame_hist[reset_ids] = obs["amp"][reset_ids].unsqueeze(1).repeat(
+                            1, self.amp_num_frames - 1, 1
+                        )
+
+                    extras["amp_window"] = amp_window
+                    extras["amp_label"] = amp_label
                     self.alg.process_env_step(obs, rewards, dones, extras)
 
                     # Logger bookkeeping
